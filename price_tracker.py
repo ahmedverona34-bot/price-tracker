@@ -150,7 +150,7 @@ SLOW_AFTER_SEC = 45  # a site slower than this gets an amber status dot
 # never reads the installed version from the registry: the registry can hold a
 # newer one after an update, and a mismatch there would make the button offer
 # the same build forever.
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 # A manifest file served over HTTPS. Two lines:
 #
 #   1.1.0
@@ -2402,18 +2402,16 @@ class TrackerCore:
         # the old files again.
         exe = os.path.join(app_dir(), "PriceTracker.exe")
         if os.path.exists(exe) and not exe.startswith("\\\\"):
-            helper = os.path.join(run_dir, "relaunch_after_update.cmd")
+            helper = os.path.join(run_dir, "relaunch_after_update.vbs")
             try:
                 _write_relaunch_helper(helper, inst.pid,
                                        os.path.basename(dest), exe)
-                # helper is quoted: an unquoted path with spaces breaks
-                # `start` and pops a visible error box. /d ignores AutoRun
-                # entries that could hijack the update. cwd must be local:
-                # cmd cannot use a UNC working directory ("The network path
-                # was not found.").
+                # wscript takes the script path as one plain argument and
+                # shows no console, so there is no `cmd /c start` quoting
+                # layer left to mangle it. The `//?/` prefix passes long or
+                # oddly-shaped paths through untouched.
                 subprocess.Popen(
-                    ["cmd.exe", "/d", "/c", "start", '""', "/min",
-                     '"%s"' % helper],
+                    ["wscript.exe", "//nologo", "//?%s" % helper],
                     close_fds=True,
                     cwd=run_dir,
                     creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
@@ -2609,78 +2607,128 @@ class Api:
 
 
 def _write_relaunch_helper(path, installer_pid, setup_image, exe):
-    """Write the batch script that reopens the app after an update.
+    """Write the script that reopens the app after an update.
 
-    Kept as a file rather than an inline `cmd /c` string because the polling
-    loop needs real newlines, and because a script on disk can be inspected
-    when something goes wrong.
+    This is a .vbs run by wscript.exe, not a .cmd, and that is the whole fix
+    for the failure it replaces. The batch version had to be started through
+    `cmd /c start "" "<path>"`, and cmd's quoting rules cut that argument in
+    half: the user saw "Windows cannot find '\\\\'" and the app never came
+    back. VBScript takes the path as a plain string and never re-parses it,
+    and wscript runs it with no console at all.
 
     It polls for the installer's PID rather than sleeping a fixed time: the
-    install writes roughly 26 MB and the machine's speed is not ours to assume,
-    so starting the app on a timer risks opening the old files.
+    install writes roughly 26 MB and the machine's speed is not ours to
+    assume, so starting the app on a timer risks opening the old files.
     """
-    # The script does not delete itself. cmd holds a script open while it runs,
-    # so `del` from inside it fails, and doing it through a second nested cmd
-    # means quoting a path through start's extra parse layer, which is fragile
-    # enough to fail silently and leave the file behind. Instead the next
-    # update removes it: see the unlink below. The path never changes, so at
-    # most one stale helper exists and it is replaced before use.
+    # The script does not delete itself: the host holds it open while it
+    # runs. Instead the next update removes it -- see the unlink below. The
+    # path never changes, so at most one stale helper exists and it is
+    # replaced before use.
     exe_image = os.path.basename(exe)
+    log_path = os.path.join(os.path.dirname(path), "relaunch.log")
     body = (
-        "@echo off\r\n"
-        "rem Written by price_tracker.py. Relaunches the app after an update.\r\n"
-        "rem Progress goes to relaunch.log next to this script.\r\n"
-        "set \"RLOG=%%~dp0relaunch.log\"\r\n"
-        "echo [%%date%% %%time%%] waiting for installer PID %d>> \"%%RLOG%%\"\r\n"
-        "set WAITED=0\r\n"
-        ":wait\r\n"
-        # No caret before the redirect: this file is run directly by cmd, and
-        # `2^>nul` is passed to tasklist as a literal argument, which it
-        # rejects. The loop then never waits and the app can open against the
-        # half-replaced files.
-        'tasklist /fi "PID eq %d" 2>nul | find "%d" >nul\r\n'
-        "if errorlevel 1 goto startapp\r\n"
-        # A PID alone is not proof: Windows recycles PIDs quickly, and a
-        # recycled PID would park this loop forever. The image name must also
-        # match the setup that was just run.
-        'tasklist /fi "PID eq %d" /fo csv /nh 2>nul | find /i "%s" >nul\r\n'
-        "if errorlevel 1 goto startapp\r\n"
-        # Even a correct wait must end: after ~10 minutes launch anyway.
-        "set /a WAITED+=1\r\n"
-        "if %%WAITED%% GEQ 600 goto startapp\r\n"
-        "ping -n 2 127.0.0.1 >nul\r\n"
-        "goto wait\r\n"
-        ":startapp\r\n"
-        "echo [%%date%% %%time%%] installer gone, launching app>> \"%%RLOG%%\"\r\n"
-        "rem The installer has exited. A short pause lets it release the exe.\r\n"
-        "ping -n 2 127.0.0.1 >nul\r\n"
-        # Guard the relaunch: `start` on a missing/UNC exe pops a visible
-        # "The network path was not found." MessageBox. Exiting quietly
-        # leaves the update installed without scaring the user.
-        'if not exist "%s" (echo [%%date%% %%time%%] exe missing, giving up>> "%%RLOG%%" & exit /b 0)\r\n'
-        "set TRIES=0\r\n"
-        ":try\r\n"
-        'start "" "%s"\r\n'
-        "ping -n 4 127.0.0.1 >nul\r\n"
-        # Confirm the app is actually up: a start against half-replaced files
-        # dies silently, so retry instead of hoping once.
-        'tasklist /fi "IMAGENAME eq %s" 2>nul | find /i "%s" >nul\r\n'
-        "if not errorlevel 1 (echo [%%date%% %%time%%] app running>> \"%%RLOG%%\" & exit /b 0)\r\n"
-        "set /a TRIES+=1\r\n"
-        "if %%TRIES%% GEQ 5 (echo [%%date%% %%time%%] FAILED to start app>> \"%%RLOG%%\" & exit /b 1)\r\n"
-        "goto try\r\n"
-    ) % (installer_pid, installer_pid, installer_pid, installer_pid,
-         setup_image, exe, exe, exe_image, exe_image)
+        "' Written by price_tracker.py. Relaunches the app after an update.\r\n"
+        "' Every step is appended to relaunch.log next to this script.\r\n"
+        "'\r\n"
+        "' Process checks go through tasklist, not WMI: on the machines this\r\n"
+        "' has to survive, connecting to winmgmts:\\\\.\\root\\cimv2 fails with\r\n"
+        "' \"Generic failure\" and every check would then read as \"gone\".\r\n"
+        "Option Explicit\r\n"
+        "\r\n"
+        "Dim fso, log, pid, waited, tries, sh, err, text\r\n"
+        "Set fso = CreateObject(\"Scripting.FileSystemObject\")\r\n"
+        "Set sh = CreateObject(\"WScript.Shell\")\r\n"
+        "pid = %d\r\n"
+        "Set log = fso.CreateTextFile(\"%s\", True)\r\n"
+        "log.WriteLine Now & \" waiting for installer pid \" & pid\r\n"
+        "\r\n"
+        "' A PID alone is not proof: Windows recycles PIDs, so the process\r\n"
+        "' image name must match the setup that was just run as well.\r\n"
+        "waited = 0\r\n"
+        "Do While IsRunning(\"PID eq \" & pid, \"%s\")\r\n"
+        "  waited = waited + 1\r\n"
+        "  If waited > 300 Then Exit Do\r\n"
+        "  WScript.Sleep 2000\r\n"
+        "Loop\r\n"
+        "log.WriteLine Now & \" installer gone, launching the app\"\r\n"
+        "\r\n"
+        "' A short pause lets the installer release the exe.\r\n"
+        "WScript.Sleep 2000\r\n"
+        "\r\n"
+        "' Guard the relaunch: running a missing path pops an error box.\r\n"
+        "If Not fso.FileExists(\"%s\") Then\r\n"
+        "  log.WriteLine Now & \" exe missing, giving up\"\r\n"
+        "  log.Close\r\n"
+        "  WScript.Quit 0\r\n"
+        "End If\r\n"
+        "\r\n"
+        "' Retry: a launch against half-replaced files dies silently.\r\n"
+        "tries = 0\r\n"
+        "Do\r\n"
+        "  sh.CurrentDirectory = fso.GetParentFolderName(\"%s\")\r\n"
+        "  err = \"\"\r\n"
+        "  On Error Resume Next\r\n"
+        "  sh.Run \"\"\"%s\"\"\", 1, False\r\n"
+        "  If Err.Number <> 0 Then err = Err.Description\r\n"
+        "  Err.Clear\r\n"
+        "  On Error GoTo 0\r\n"
+        "  If err = \"\" Then\r\n"
+        "    log.WriteLine Now & \" launch attempt \" & tries + 1 & \" ok\"\r\n"
+        "  Else\r\n"
+        "    log.WriteLine Now & \" launch attempt \" & tries + 1 & \" \" & err\r\n"
+        "  End If\r\n"
+        "  WScript.Sleep 4000\r\n"
+        "  If IsRunning(\"IMAGENAME eq %s\", \"%s\") Then\r\n"
+        "    log.WriteLine Now & \" app is running\"\r\n"
+        "    log.Close\r\n"
+        "    WScript.Quit 0\r\n"
+        "  End If\r\n"
+        "  tries = tries + 1\r\n"
+        "  If tries > 5 Then\r\n"
+        "    log.WriteLine Now & \" FAILED to start the app\"\r\n"
+        "    log.Close\r\n"
+        "    WScript.Quit 1\r\n"
+        "  End If\r\n"
+        "Loop\r\n"
+        "\r\n"
+        "\r\n"
+        "' True when tasklist reports a process matching the filter AND the\r\n"
+        "' image name. Two conditions on purpose: a bare PID can be recycled\r\n"
+        "' by an unrelated process while we wait.\r\n"
+        "Function IsRunning(filter, image)\r\n"
+        "  Dim cmd, out, f, line, found\r\n"
+        "  out = fso.BuildPath(fso.GetParentFolderName(WScript.ScriptFullName), _\r\n"
+        "    \"tasklist.tmp\")\r\n"
+        "  cmd = \"%%comspec%% /d /c tasklist /fi \"\"\" & filter & _\r\n"
+        "    \"\"\" /fo csv /nh > \"\"\" & out & \"\"\" 2>nul\"\r\n"
+        "  sh.Run cmd, 0, True\r\n"
+        "  found = False\r\n"
+        "  If fso.FileExists(out) Then\r\n"
+        "    Set f = fso.OpenTextFile(out, 1)\r\n"
+        "    Do Until f.AtEndOfStream\r\n"
+        "      line = f.ReadLine\r\n"
+        "      If InStr(1, line, image, vbTextCompare) > 0 Then found = True\r\n"
+        "    Loop\r\n"
+        "    f.Close\r\n"
+        "    fso.DeleteFile out, True\r\n"
+        "  End If\r\n"
+        "  IsRunning = found\r\n"
+        "End Function\r\n"
+    ) % (installer_pid, log_path.replace('"', '""'),
+         setup_image.replace('"', '""'),
+         exe.replace('"', '""'),
+         exe.replace('"', '""'), exe.replace('"', '""'),
+         exe_image.replace('"', '""'), exe_image.replace('"', '""'))
     # Remove the previous helper first. It is dead by now: the app it was
-    # waiting on has exited, and its polling process is gone with it. Best
+    # waiting on has exited, and its host process is gone with it. Best
     # effort, because a locked file is not worth failing an update over.
     try:
         os.remove(path)
     except OSError:
         pass
-    # Batch files run under the system ANSI code page, so non-ASCII install
-    # paths (Arabic usernames) must be written in the locale encoding,
-    # not ascii -- ascii raises UnicodeEncodeError and breaks the update.
+    # wscript reads the file as ANSI, so a non-ASCII install path (an Arabic
+    # username) has to be written in the locale encoding; ascii raises
+    # UnicodeEncodeError and breaks the update.
     try:
         import locale
         enc = locale.getpreferredencoding(False) or "utf-8"
