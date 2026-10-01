@@ -344,10 +344,6 @@
         loadSettings();
         renderUpdateCard(updateInfo);   // the update card lives here
       }
-      if (btn.dataset.page === "status") {
-        renderStatusPage(state.status || {});
-        refreshLogs();
-      }
     });
   });
 
@@ -1235,34 +1231,7 @@
     tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l9-9h9v9l-9 9z"/><circle cx="16.5" cy="7.5" r="1.5"/></svg>'
   };
 
-  function renderStatusPage(st) {
-    var stats = (st && st.site_stats) || {};
-    var names = Object.keys(stats);
-    var ok = names.filter(function (k) { return stats[k].status === "ok"; }).length;
-    var enabled = state.sites.filter(function (s) {
-      return s.enabled !== false;
-    }).length;
-    setHTML($("engineCards"), [
-      statCard({ label: "مواقع مفعّلة", value: String(enabled),
-        foot: "من " + state.sites.length + " مسجل", icon: "stack",
-        tone: "blue", flat: true,
-        pct: state.sites.length ? Math.round(100 * enabled / state.sites.length) : 0 }),
-      statCard({ label: "شغالة الآن", value: String(ok),
-        foot: ok ? "محرك شغال" : "في انتظار بحث", icon: "pulse",
-        tone: ok ? "green" : "amber", green: !!ok, flat: true,
-        pct: state.sites.length ? Math.round(100 * ok / state.sites.length) : 0 }),
-      statCard({ label: "مرات البحث", value: String(st.search_count || 0),
-        foot: st.failed && st.failed.length ? st.failed.length + " موقع واقع"
-                                            : "من غير أخطاء",
-        icon: "radar", tone: st.failed && st.failed.length ? "amber" : "blue",
-        flat: true, pct: null }),
-      statCard({ label: "آخر تحديث", value: timeAgo(st.updated_at || "") || "—",
-        foot: (st.updated_at || "").slice(11) || "", icon: "clock",
-        tone: "blue", flat: true, pct: null })
-    ].join(""));
-  }
-
-  /* ---- manual update check, on the status page ----
+  /* ---- manual update check, on the settings page ----
      The rail icon only ever appears when a new build is found, so there is
      nowhere to click when nothing is wrong and nothing is published either.
      This card is that place: it always shows the installed version, says
@@ -1335,17 +1304,6 @@
     });
   }
 
-  function refreshLogs() {
-    api("get_logs", 60).then(function (lines) {
-      var box = $("logBox");
-      if (!box) return;
-      box.textContent = (lines && lines.length)
-        ? lines.join("\n") : "لا يوجد سجل بعد.";
-      box.scrollTop = box.scrollHeight;
-    });
-  }
-  $("logRefreshBtn").addEventListener("click", refreshLogs);
-
   (function wireUpdateCard() {
     var checkBtn = $("checkUpdateBtn"), installBtn = $("installUpdateBtn");
     if (checkBtn) checkBtn.addEventListener("click", function () { runUpdateCheck(true); });
@@ -1363,9 +1321,6 @@
       var st = state.status || {};
       lv.classList.toggle("hidden",
         !(st.search_count > 0 && !st.searching && state.rows.length > 0));
-    }
-    if ($("page-status").classList.contains("active")) {
-      renderStatusPage(state.status || {});
     }
     var n = selectedLinks().length;
     $("selCount").textContent = n ? "المحدد: " + n : "";
