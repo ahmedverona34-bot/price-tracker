@@ -340,7 +340,10 @@
           p.classList.toggle("active", p.id === "page-" + btn.dataset.page);
         });
       if (btn.dataset.page === "sites") loadSites();
-      if (btn.dataset.page === "settings") loadSettings();
+      if (btn.dataset.page === "settings") {
+        loadSettings();
+        renderUpdateCard(updateInfo);   // the update card lives here
+      }
       if (btn.dataset.page === "files") renderFileInfo();
       if (btn.dataset.page === "status") {
         renderStatusPage(state.status || {});
@@ -1375,7 +1378,6 @@
     }
     if ($("page-status").classList.contains("active")) {
       renderStatusPage(state.status || {});
-      renderUpdateCard(updateInfo);
     }
     var n = selectedLinks().length;
     $("selCount").textContent = n ? "المحدد: " + n : "";
