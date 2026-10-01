@@ -1,4 +1,4 @@
-# متتبع الأسعار — Price Tracker
+Price Tracker
 
 A Windows desktop app that searches one keyword across Egyptian phone stores
 (2B Egypt, Dubai Phone) and shows real prices with before/after values,
