@@ -14,6 +14,7 @@ Self-test (no window): python price_tracker.py --selftest [query]
 """
 import asyncio
 import contextlib
+import io
 import json
 import logging
 import os
@@ -108,7 +109,7 @@ SLOW_AFTER_SEC = 45  # a site slower than this gets an amber status dot
 # never reads the installed version from the registry: the registry can hold a
 # newer one after an update, and a mismatch there would make the button offer
 # the same build forever.
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 # A manifest file served over HTTPS. Two lines:
 #
 #   1.1.0
@@ -2314,21 +2315,63 @@ class TrackerCore:
         except Exception:
             logging.exception("update download failed")
             return {"ok": False, "message": "فشل تحميل التحديث، يُرجى المحاولة لاحقًا"}
-        # The setup overwrites files this process is running from, so it must
-        # exit first. /VERYSILENT keeps the user from seeing a wizard, and
-        # /DIR pins it to this install so it updates in place.
+        # The setup overwrites the files this process is running from, so this
+        # process has to be gone before the installer reaches them. /VERYSILENT
+        # keeps the user from seeing a wizard, and /DIR pins it to this install
+        # so the update lands in place.
         args = [dest, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
                 "/CURRENTUSER", "/DIR=%s" % app_dir()]
         logging.info("launching update installer: %s", dest)
         try:
-            subprocess.Popen(args, close_fds=True)
+            inst = subprocess.Popen(args, close_fds=True)
         except OSError:
             logging.exception("update installer failed to start")
             return {"ok": False, "message": "مقدرنا نشغل التحديث"}
-        # Give the installer a moment to open its own process before the files
-        # it is about to replace stop being locked, then close the window.
-        def _close_soon():
-            time.sleep(2.5)
+
+        # Closing the window is not the end of the update: the user asked for a
+        # new build, not for a closed program, so the app has to come back.
+        #
+        # It cannot be done from here. This process is destroyed seconds later
+        # (os._exit below), so a thread waiting on the installer dies with it.
+        # It is not done by the installer either: the [Run] entry in
+        # installer.iss carries skipifsilent, and a silent run is what an update
+        # must be, so it is skipped by design. Adding an /AUTOREL entry and
+        # passing /MERGETASKS was tried and does not fire, so it is not relied on.
+        #
+        # What works is a small helper script in a process that outlives this
+        # one: it polls until the installer has exited, then starts the new
+        # build. Polling for the PID is what orders the two correctly. Starting
+        # the app on a timer instead would race a 26 MB install and could open
+        # the old files again.
+        exe = os.path.join(app_dir(), "PriceTracker.exe")
+        if os.path.exists(exe):
+            helper = os.path.join(data_dir(), "relaunch_after_update.cmd")
+            try:
+                _write_relaunch_helper(helper, inst.pid, exe)
+                subprocess.Popen(
+                    ["cmd.exe", "/c", "start", '""', "/min", helper],
+                    close_fds=True,
+                    creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
+                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                logging.info("update will relaunch %s once pid %s exits",
+                             exe, inst.pid)
+            except OSError:
+                logging.exception("could not schedule the relaunch")
+        else:
+            # Running from source, or a build that names its exe differently:
+            # there is nothing to reopen, which is the right outcome.
+            logging.info("no exe at %s, not scheduling a relaunch", exe)
+
+        # Wait for the installer, then close. The window has to go either way,
+        # so a failed wait must not keep it on screen.
+        def _close_when_done():
+            try:
+                inst.wait(timeout=UPDATE_EXIT_WAIT_SEC)
+            except Exception:
+                logging.warning("installer wait ended early", exc_info=True)
             win = self._window
             try:
                 if win is not None:
@@ -2337,8 +2380,10 @@ class TrackerCore:
                 logging.exception("could not close the window for the update")
             BROWSER.close()
             os._exit(0)
-        threading.Thread(target=_close_soon, daemon=True).start()
-        return {"ok": True, "message": "يجري التحديث، وسيتم إغلاق البرنامج بعد لحظات"}
+
+        threading.Thread(target=_close_when_done, daemon=True).start()
+        return {"ok": True,
+                "message": "يجري التحديث، وسيُفتح البرنامج تلقائيًا بعد قليل"}
 
     def open_excel_file(self):
         if not self.last_saved_path or not os.path.exists(self.last_saved_path):
@@ -2489,6 +2534,33 @@ class Api:
 
     def open_excel(self):
         return self._core.open_excel_file()
+
+
+def _write_relaunch_helper(path, installer_pid, exe):
+    """Write the batch script that reopens the app after an update.
+
+    Kept as a file rather than an inline `cmd /c` string because the polling
+    loop needs real newlines, and because a script on disk can be inspected
+    when something goes wrong.
+
+    It polls for the installer's PID rather than sleeping a fixed time: the
+    install writes roughly 26 MB and the machine's speed is not ours to assume,
+    so starting the app on a timer risks opening the old files.
+    """
+    body = (
+        "@echo off\r\n"
+        "rem Written by price_tracker.py. Removes itself once the app is back.\r\n"
+        ":wait\r\n"
+        'tasklist /fi "PID eq %d" 2^>nul | find "%d" >nul\r\n'
+        "if not errorlevel 1 (ping -n 1 127.0.0.1 >nul & goto wait)\r\n"
+        "rem The installer has exited. A short pause lets it release the exe.\r\n"
+        "ping -n 2 127.0.0.1 >nul\r\n"
+        'start "" "%s"\r\n'
+        "del \"%s\" >nul 2>&1\r\n"
+    ) % (installer_pid, installer_pid, exe, path)
+    with io.open(path, "w", encoding="ascii", newline="") as f:
+        f.write(body)
+    logging.info("relaunch helper written to %s", path)
 
 
 def _resource(*parts):

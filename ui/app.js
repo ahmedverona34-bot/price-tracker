@@ -490,12 +490,15 @@
       // less than that long ago it is still considered current, so a repeat
       // check is answered without touching the network.
       api("check_update", UPDATE_EVERY_MS / 1000).then(function (r) {
-        if (!r || !r.has_update) return;   // current, or offline: stay silent
+        if (!r) return;
+        updateInfo = r;
+        updateInfo.checked = true;
+        renderUpdateCard(updateInfo);
+        if (!r.has_update) return;   // current, or offline: stay silent
         if (railBtn.classList.contains("hidden")) {
-          railBtn.classList.remove("hidden");
           show("في نسخة جديدة: " + r.latest);
         }
-        railBtn.title = "في نسخة جديدة: " + r.latest;
+        applyUpdateRail(r);
       });
     }
 
@@ -507,21 +510,7 @@
       if (!document.hidden) check();
     });
 
-    railBtn.addEventListener("click", function () {
-      if (!window.confirm("سيتم إغلاق البرنامج الآن حتى يتم تحديث نفسه. هل تريد المتابعة؟"))
-        return;
-      railBtn.disabled = true;
-      show("يجري تحميل التحديث…");
-      api("install_update").then(function (r) {
-        if (!r || !r.ok) {
-          railBtn.disabled = false;
-          show((r && r.message) || "فشل التحديث، يُرجى المحاولة لاحقًا");
-          return;
-        }
-        // The backend closes the window itself once the installer is running.
-        show(r.message || "يجري التحديث…");
-      });
-    });
+    railBtn.addEventListener("click", runUpdateInstall);
 
     setTimeout(check, 2500);
   })();
@@ -1282,6 +1271,79 @@
     ].join(""));
   }
 
+  /* ---- manual update check, on the status page ----
+     The rail icon only ever appears when a new build is found, so there is
+     nowhere to click when nothing is wrong and nothing is published either.
+     This card is that place: it always shows the installed version, says
+     plainly what the last check found, and lets the user look right now
+     instead of waiting for the background timer. */
+  function renderUpdateCard(info) {
+    var verLine = $("updateVerLine"), stateLine = $("updateStateLine");
+    var checkBtn = $("checkUpdateBtn"), installBtn = $("installUpdateBtn");
+    if (!verLine || !stateLine || !checkBtn) return;
+    if (!info) return;
+    if (info.current) verLine.textContent = "\u0627\u0644\u0625\u0635\u062f\u0627\u0631 \u0627\u0644\u0645\u062b\u0628\u0651\u062a: " + info.current;
+    if (info.checked && info.has_update) {
+      stateLine.textContent = "\u0641\u064a \u0646\u0633\u062e\u0629 \u062c\u062f\u064a\u062f\u0629: " + info.latest;
+      if (installBtn) installBtn.classList.remove("hidden");
+    } else if (info.checked) {
+      stateLine.textContent = info.message || "\u0627\u0644\u0628\u0631\u0646\u0627\u0645\u062c \u0645\u062d\u062f\u0651\u062b.";
+      if (installBtn) installBtn.classList.add("hidden");
+    } else {
+      stateLine.textContent = "\u0644\u0645 \u064a\u064f\u0645 \u0627\u0644\u0641\u062d\u0635 \u0628\u0639\u062f.";
+    }
+  }
+
+  var updateInfo = null;
+
+  function runUpdateCheck(manual) {
+    var checkBtn = $("checkUpdateBtn"), label = $("checkUpdateLabel");
+    if (checkBtn) checkBtn.disabled = true;
+    if (label) label.textContent = "\u062c\u0627\u0631\u064a \u0627\u0644\u0641\u062d\u0635\u2026";
+    // No max_age: this is either an explicit user request or the automatic
+    // pass, and both are answered from the live manifest rather than a cache
+    // that may predate a freshly published build.
+    return api("check_update").then(function (r) {
+      if (checkBtn) checkBtn.disabled = false;
+      if (label) label.textContent = "\u0627\u0644\u0628\u062d\u062b \u0639\u0646 \u062a\u062d\u062f\u064a\u062b";
+      if (!r) return;
+      updateInfo = r;
+      updateInfo.checked = true;
+      renderUpdateCard(updateInfo);
+      applyUpdateRail(r);
+      if (manual) toast(r.message || "");
+    });
+  }
+
+  /* Shared by the rail icon and the status-page card so the two cannot drift. */
+  function applyUpdateRail(r) {
+    var railBtn = $("updateRailBtn");
+    if (!railBtn || !r) return;
+    if (r.has_update) {
+      railBtn.classList.remove("hidden");
+      railBtn.title = "\u0641\u064a \u0646\u0633\u062e\u0629 \u062c\u062f\u064a\u062f\u0629: " + r.latest;
+    }
+  }
+
+  /* Download, install, and come back up on their own. The backend closes this
+     window and relaunches once the installer has finished, so there is
+     deliberately nothing further to do here. */
+  function runUpdateInstall() {
+    if (!window.confirm("\u0633\u064a\u0642\u0644 \u0627\u0644\u0628\u0631\u0646\u0627\u0645\u062c \u0627\u0644\u0622\u0646 \u062d\u062a\u0649 \u064a\u062a\u0645 \u0627\u0644\u062a\u062d\u062f\u064a\u062b \u0648\u064a\u0641\u062a\u062d \u0645\u062a\u0637\u0628\u0642\u0627\u064b \u0646\u0641\u0633\u0647. \u0647\u0644 \u062a\u0631\u063a\u0628 \u0628\u0627\u0644\u0645\u062a\u0627\u0628\u0639\u0629\u061f"))
+      return;
+    var installBtn = $("installUpdateBtn");
+    if (installBtn) installBtn.disabled = true;
+    toast("\u064a\u062c\u0631\u064a \u062a\u062d\u0645\u064a\u0644 \u0627\u0644\u062a\u062d\u062f\u064a\u062a\u2026");
+    api("install_update").then(function (r) {
+      if (r && r.ok) {
+        toast(r.message || "\u064a\u062c\u0631\u064a \u0627\u0644\u062a\u062d\u062f\u064a\u062a\u2026");
+        return;   // the backend closes and relaunches the app
+      }
+      if (installBtn) installBtn.disabled = false;
+      toast((r && r.message) || "\u0641\u0634\u0644 \u0627\u0644\u062a\u062d\u062f\u064a\u062a\u060c \u064a\u064f\u0631\u062c\u0649 \u0627\u0644\u0645\u062d\u0627\u0648\u0644\u0629 \u0644\u0627\u062d\u0642\u0627");
+    });
+  }
+
   function refreshLogs() {
     api("get_logs", 60).then(function (lines) {
       var box = $("logBox");
@@ -1293,6 +1355,16 @@
   }
   $("logRefreshBtn").addEventListener("click", refreshLogs);
 
+  (function wireUpdateCard() {
+    var checkBtn = $("checkUpdateBtn"), installBtn = $("installUpdateBtn");
+    if (checkBtn) checkBtn.addEventListener("click", function () { runUpdateCheck(true); });
+    if (installBtn) installBtn.addEventListener("click", runUpdateInstall);
+    api("app_version").then(function (v) {
+      if (v && v.version && updateInfo) updateInfo.current = v.version;
+      renderUpdateCard(updateInfo);
+    });
+  })();
+
   function renderSel() {
     renderEngine(state.status || {});
     var lv = $("liveBadge");
@@ -1303,6 +1375,7 @@
     }
     if ($("page-status").classList.contains("active")) {
       renderStatusPage(state.status || {});
+      renderUpdateCard(updateInfo);
     }
     var n = selectedLinks().length;
     $("selCount").textContent = n ? "المحدد: " + n : "";
@@ -1506,3 +1579,4 @@
 
   boot();
 })();
+
