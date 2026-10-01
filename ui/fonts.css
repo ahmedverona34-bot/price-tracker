@@ -1,0 +1,27 @@
+/* Thmanyah Sans only. Weights 300/400/500/700/900. Never 600.
+   OTF files are used unmodified, referenced directly. */
+@font-face {
+  font-family: "Thmanyah Sans";
+  src: url("fonts/thmanyahsans-Light.otf") format("opentype");
+  font-weight: 300; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Thmanyah Sans";
+  src: url("fonts/thmanyahsans-Regular.otf") format("opentype");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Thmanyah Sans";
+  src: url("fonts/thmanyahsans-Medium.otf") format("opentype");
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Thmanyah Sans";
+  src: url("fonts/thmanyahsans-Bold.otf") format("opentype");
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Thmanyah Sans";
+  src: url("fonts/thmanyahsans-Black.otf") format("opentype");
+  font-weight: 900; font-style: normal; font-display: swap;
+}

@@ -1,0 +1,50 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ---- Build output (regenerate with build_exe.bat / build_setup.bat) ----
+build/
+dist/
+dist-installer/
+*.spec.bak
+
+# PyInstaller / Inno Setup install residue, in case an installer is ever
+# pointed at the project folder instead of %LOCALAPPDATA%\PriceTracker
+_internal/
+unins000.exe
+unins000.dat
+
+# ---- User data ----
+# These are written at runtime and belong to whoever runs the app, not to the
+# repo. When frozen, the app writes them to %APPDATA%\PriceTracker instead
+# (see data_dir() in price_tracker.py); they are ignored here for the
+# from-source case.
+settings.json
+detail_cache.json
+prevrun.json
+prices.xlsx
+*.log
+
+# ---- Local tooling ----
+# Agent/editor tooling, not part of the application.
+.opencode/
+.impeccable/
+
+# ---- Design sources kept local ----
+# DESIGN.md is this repo's design-system record: tokens, typography, layout and
+# the reasoning behind them, including how they were extracted from the
+# upstream Stitch screens. The raw Stitch originals and their screen renders
+# stay local.
+stitch/
+stitch_arabic_electronics_price_tracker/
+
+# Pre-redesign interface, superseded by ui/.
+ui_backup_before_stitch/
+
+# ---- OS noise ----
+Thumbs.db
+Desktop.ini
+.DS_Store
+__MACOSX/

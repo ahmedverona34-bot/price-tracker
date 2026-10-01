@@ -1,0 +1,1469 @@
+/* Price Tracker table UI.
+ *
+ * One state object, one pure filter function, one render function.
+ * Every control writes to `state` and calls `apply()`; nothing else draws.
+ * Filtering is entirely local: no control ever triggers a re-scrape.
+ */
+(function () {
+  "use strict";
+
+  var KIND_DEVICES = "أجهزة فقط";
+  var KIND_ACCESSORIES = "إكسسوارات فقط";
+  var KIND_ALL = "الكل";
+
+  /* Column order and headers follow the design system. `image` keeps an empty
+     label because it is a thumbnail well, not a word. */
+  var COLUMNS = [
+    { key: "image", label: "صورة" },
+    { key: "site", label: "المتجر" },
+    { key: "title", label: "اسم المنتج والمواصفات" },
+    { key: "before", label: "السعر السابق", num: true },
+    { key: "after", label: "السعر الحالي", num: true },
+    { key: "discount", label: "الخصم", num: true },
+    { key: "note", label: "الكوبون المتاح" },
+    { key: "link", label: "المصدر" },
+    { key: "time", label: "وقت السحب" }
+  ];
+  var DEFAULT_COLS = ["site", "title", "before", "after", "discount",
+                      "note", "link", "time"];
+  var NO_SORT = { image: 1, link: 1 };
+
+  /* Canonical display order. A saved settings.json may list columns in any
+     order, so they are normalised into this one for display; which columns are
+     visible is never changed here. */
+  var COLUMN_ORDER = {};
+  COLUMNS.forEach(function (c, i) { COLUMN_ORDER[c.key] = i; });
+
+  var SITE_STATUS = { ok: "شغال", slow: "بطيء", failed: "واقع",
+                      blocked: "محجوب", off: "مغلق", idle: "—" };
+
+  /* ------------------------------------------------------------------ *
+   * State: the single source of truth for what the table shows.
+   * ------------------------------------------------------------------ */
+  var state = {
+    rows: [],            // every row Python sent, already kind-tagged
+    kind: KIND_DEVICES,
+    sites: [],           // site metadata (name, enabled, status, rows)
+    siteOn: {},          // site name -> included in the view
+    fMin: "",            // view minimum price
+    fMax: "",            // view maximum price
+    fDisc: "",           // view minimum discount %
+    minPrice: "",        // advanced minimum from settings.json
+    query: "",           // live text filter
+    sort: { key: "discount", dir: -1 },
+    cols: DEFAULT_COLS.slice(),
+    selected: {},        // link -> true
+    anchor: -1,
+    status: null,
+    rowsToken: -1,
+    pinned: false,
+    wasSearching: false,
+    lastMsg: "",
+    lastUpdatedAt: ""
+  };
+
+  /* ------------------------------------------------------------------ *
+   * Bridge
+   * ------------------------------------------------------------------ */
+  function bridge() {
+    try {
+      if (typeof window.pywebview !== "undefined"
+        && window.pywebview && window.pywebview.api) {
+        return window.pywebview.api;
+      }
+    } catch (e) { /* not ready */ }
+    return null;
+  }
+
+  function reportJsError(msg) {
+    try {
+      var b = bridge();
+      if (b && b.log_message) b.log_message("error", String(msg).slice(0, 500));
+    } catch (e) { /* logging must never break the page */ }
+  }
+
+  window.addEventListener("error", function (e) {
+    reportJsError("window.onerror: " + (e.message || e.type));
+  });
+
+  function api(name) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    var b = bridge();
+    if (!b || typeof b[name] !== "function") {
+      reportJsError("bridge missing for api." + name);
+      return Promise.resolve(null);
+    }
+    try {
+      return Promise.resolve(b[name].apply(b, args)).catch(function (err) {
+        reportJsError("api." + name + " rejected: " + err);
+        return null;
+      });
+    } catch (err) {
+      reportJsError("api." + name + " threw: " + err);
+      return null;
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Helpers
+   * ------------------------------------------------------------------ */
+  function $(id) { return document.getElementById(id); }
+
+  /* Rewrite an element only when the markup actually changed.
+     Rebuilding identical HTML would drop text selection, hover states and any
+     pointer event already in flight, so it is skipped. */
+  function setHTML(el, html) {
+    if (!el) return;
+    if (el.__html === html) return;
+    el.innerHTML = html;
+    el.__html = html;
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  /* Arabic-aware normalisation for matching only (never for display):
+     strip tashkeel and tatweel, unify alef/ya/ta-marbuta, fold Arabic
+     digits to ASCII, so "حافظه" matches "حافظة" and "٥٠٠٠٠" matches 5000. */
+  function norm(s) {
+    return String(s == null ? "" : s)
+      .replace(/[\u064B-\u0652\u0670\u0640]/g, "")
+      .replace(/[\u0622\u0623\u0625\u0671\u0649\u064A\u0629]/g,
+        function (ch) { return ch === "\u0629" ? "\u0647" : "\u0627"; })
+      .replace(/[\u0660-\u0669]/g, function (d) {
+        return String(d.charCodeAt(0) - 0x0660);
+      })
+      .replace(/[\u06F0-\u06F9]/g, function (d) {
+        return String(d.charCodeAt(0) - 0x06F0);
+      })
+      .toLowerCase().trim();
+  }
+
+  function toNum(v) {
+    if (typeof v === "number") return v;
+    if (v == null || v === "") return null;
+    var n = parseFloat(norm(v).replace(/,/g, ""));
+    return isNaN(n) ? null : n;
+  }
+
+  function money(v) {
+    var n = toNum(v);
+    return n == null ? "" : Math.round(n).toLocaleString("en-US");
+  }
+
+  /* Currency suffix shown on the current price and its saving line, matching
+     the reference ("62,499 د.إ" over "▼ 6,500 د.إ"). The previous price carries
+     no suffix there, so it is left bare. */
+  var CURRENCY = "ج.م";
+
+  /* "منذ 6 دقائق" — the design shows relative age, not a wall-clock stamp.
+     Python stamps rows with LOCAL wall-clock time, so the string is parsed as
+     local time too; reading it as UTC would shift every row by the machine's
+     offset and a fresh scrape would claim to be from the future. Display only:
+     the full timestamp stays in the cell's tooltip. Anything unparseable falls
+     back to the raw string so no row ever goes blank. */
+  function timeAgo(stamp) {
+    var raw = String(stamp == null ? "" : stamp).trim();
+    if (!raw) return "";
+    var m = /(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/
+          .exec(raw);
+    if (!m) return raw;
+    var t = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)).getTime();
+    if (isNaN(t)) return raw;
+    var mins = Math.floor((Date.now() - t) / 60000);
+    if (mins < 1) return "منذ لحظات";
+    if (mins < 60) return "منذ " + mins + " دقيقة";
+    var hrs = Math.floor(mins / 60);
+    if (hrs < 24) return "منذ " + hrs + " ساعة";
+    var days = Math.floor(hrs / 24);
+    if (days < 30) return "منذ " + days + " يوم";
+    return raw;
+  }
+
+  /* Column display order, without touching which columns are shown. */
+  function orderCols(list) {
+    return (list || []).slice().sort(function (a, b) {
+      var x = COLUMN_ORDER[a], y = COLUMN_ORDER[b];
+      return (x == null ? 99 : x) - (y == null ? 99 : y);
+    });
+  }
+
+  /* Per-column width classes, taken from the reference table's <th> widths so
+     the columns land in the same proportions. */
+  var COL_WIDTH = {
+    image: "w12", site: "w28", before: "w28", after: "w36",
+    discount: "w24", note: "w36", link: "w14", time: "w28"
+  };
+  /* Alignment per the reference <th>s: the two price columns are text-left, the
+     discount, coupon, thumbnail and source columns are centred, and everything
+     else follows the RTL default (right). */
+  var COL_ALIGN = {
+    image: "center", discount: "center", note: "center", link: "center",
+    before: "left", after: "left"
+  };
+
+  /* ------------------------------------------------------------------ *
+   * THE pipeline: pure function, no DOM, no bridge.
+   * rows -> { rows, bySite, beforeSites }
+   * ------------------------------------------------------------------ */
+  function computeView(rows, st) {
+    var minP = toNum(st.minPrice);
+    var min = toNum(st.fMin);
+    var max = toNum(st.fMax);
+    var minD = toNum(st.fDisc);
+    var q = norm(st.query);
+    var out = [];
+    var bySite = {};
+
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var kind = r.kind || "device";
+
+      // 1) النوع
+      if (st.kind === KIND_DEVICES && kind !== "device") continue;
+      if (st.kind === KIND_ACCESSORIES && kind !== "accessory") continue;
+
+      // 2) advanced minimum price (settings.json)
+      if (minP != null) {
+        var ap = toNum(r.after);
+        if (ap == null || ap < minP) continue;
+      }
+      // 3) price range
+      if (min != null || max != null) {
+        var p = toNum(r.after);
+        if (p == null) continue;
+        if (min != null && p < min) continue;
+        if (max != null && p > max) continue;
+      }
+      // 4) minimum discount
+      if (minD != null) {
+        var d = toNum(r.discount) || 0;
+        if (d < minD) continue;
+      }
+      // 5) site chips
+      if (st.siteOn && st.siteOn[r.site] === false) continue;
+      // 6) live text filter (title, site, note)
+      if (q && norm(r.title + " " + r.site + " " + (r.note || ""))
+          .indexOf(q) < 0) continue;
+
+      out.push(r);
+      bySite[r.site] = (bySite[r.site] || 0) + 1;
+    }
+
+    // 7) sort
+    var k = st.sort.key, dir = st.sort.dir;
+    out.sort(function (a, b) {
+      var av = sortVal(a, k), bv = sortVal(b, k);
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
+      return String(av).localeCompare(String(bv), "ar") * dir;
+    });
+    return { rows: out, bySite: bySite };
+  }
+
+  function sortVal(r, k) {
+    if (k === "before") return toNum(r.before);
+    if (k === "after") return toNum(r.after);
+    if (k === "discount") return toNum(r.discount) || 0;
+    if (k === "site") return r.site;
+    if (k === "title") return r.title;
+    if (k === "note") return r.note;
+    if (k === "time") return r.timestamp;
+    return null;
+  }
+
+  function view() { return computeView(state.rows, state); }
+
+  /* Every state change funnels through here: one render, no exceptions
+     swallowed, so a broken control can never look like a working one. */
+  function apply(opts) {
+    try {
+      render();
+    } catch (e) {
+      reportJsError("render failed: " + e);
+      toast("توجد مشكلة في عرض الجدول، يُرجى مراجعة ملف app.log");
+    }
+  }
+
+  function setState(patch, opts) {
+    Object.keys(patch).forEach(function (k) { state[k] = patch[k]; });
+    apply(opts);
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Toasts
+   * ------------------------------------------------------------------ */
+  function toast(msg, actionLabel, actionFn) {
+    if (!msg) return;
+    var box = $("toasts");
+    var el = document.createElement("div");
+    el.className = "toast";
+    var sp = document.createElement("span");
+    sp.textContent = msg;
+    el.appendChild(sp);
+    if (actionLabel && actionFn) {
+      var b = document.createElement("button");
+      b.textContent = actionLabel;
+      b.addEventListener("click", function () { actionFn(); el.remove(); });
+      el.appendChild(b);
+    }
+    box.appendChild(el);
+    while (box.children.length > 3) box.removeChild(box.firstChild);
+    setTimeout(function () {
+      el.style.opacity = "0";
+      setTimeout(function () { el.remove(); }, 200);
+    }, 4500);
+  }
+
+  function toastSaved(res) {
+    if (!res || !res.message) return;
+    if (res.ok) toast(res.message, "فتح الملف", function () { api("open_excel"); });
+    else toast(res.message);
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Sidebar pages
+   * ------------------------------------------------------------------ */
+  var railBtns = document.querySelectorAll(".rail-btn");
+  Array.prototype.forEach.call(railBtns, function (btn) {
+    btn.addEventListener("click", function () {
+      Array.prototype.forEach.call(railBtns, function (b) {
+        b.classList.toggle("active", b === btn);
+      });
+      Array.prototype.forEach.call(
+        document.querySelectorAll(".page"), function (p) {
+          p.classList.toggle("active", p.id === "page-" + btn.dataset.page);
+        });
+      if (btn.dataset.page === "sites") loadSites();
+      if (btn.dataset.page === "settings") loadSettings();
+      if (btn.dataset.page === "files") renderFileInfo();
+      if (btn.dataset.page === "status") {
+        renderStatusPage(state.status || {});
+        refreshLogs();
+      }
+    });
+  });
+
+  function renderFileInfo() {
+    var st = state.status;
+    $("fileInfo").textContent = st && st.has_file
+      ? "آخر حفظ: " + (st.updated_at || "")
+      : "لا يوجد ملف محفوظ بعد.";
+  }
+
+  function exclWords() {
+    return ($("excludeBox").value || "").split(",")
+      .map(function (w) { return w.trim(); })
+      .filter(function (w) { return w; });
+  }
+
+  function renderExclChips() {
+    var words = exclWords();
+    setHTML($("exclChips"), words.map(function (w) {
+      return '<span class="chip excl-chip">' + esc(w)
+        + ' <button data-rm="' + esc(w) + '" aria-label="حذف ' + esc(w) + '">×</button></span>';
+    }).join("") || '<span class="muted">لا توجد كلمات مستبعدة.</span>');
+    Array.prototype.forEach.call(
+      $("exclChips").querySelectorAll("[data-rm]"), function (b) {
+        b.addEventListener("click", function () {
+          var next = exclWords().filter(function (w) { return w !== b.dataset.rm; });
+          $("excludeBox").value = next.join(", ");
+          renderExclChips();
+        });
+      });
+  }
+
+  $("exclAddBtn").addEventListener("click", function () {
+    var w = $("exclAdd").value.trim();
+    if (!w) return;
+    var words = exclWords();
+    if (words.indexOf(w) < 0) words.push(w);
+    $("excludeBox").value = words.join(", ");
+    $("exclAdd").value = "";
+    renderExclChips();
+  });
+  $("exclAdd").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); $("exclAddBtn").click(); }
+  });
+  $("exclClearBtn").addEventListener("click", function () {
+    $("excludeBox").value = "";
+    renderExclChips();
+  });
+  $("excludeBox").addEventListener("input", renderExclChips);
+
+  function renderRefreshSeg(sec) {
+    Array.prototype.forEach.call(
+      document.querySelectorAll("#refreshSeg button"), function (b) {
+        b.classList.toggle("active", Number(b.dataset.sec) === Number(sec));
+      });
+  }
+  Array.prototype.forEach.call(
+    document.querySelectorAll("#refreshSeg button"), function (b) {
+      b.addEventListener("click", function () {
+        renderRefreshSeg(b.dataset.sec);
+        api("set_refresh_sec", Number(b.dataset.sec)).then(function () {
+          poll();
+        });
+      });
+    });
+
+  function renderDefaultCols() {
+    setHTML($("defaultCols"), COLUMNS.map(function (c) {
+      return '<span class="chip"><input type="checkbox" data-col="' + c.key + '"'
+        + (state.cols.indexOf(c.key) >= 0 ? " checked" : "")
+        + ' aria-label="' + esc(c.label) + '"> '
+        + esc(c.label) + "</span>";
+    }).join(""));
+    Array.prototype.forEach.call(
+      $("defaultCols").querySelectorAll("input"), function (cb) {
+        cb.addEventListener("change", function () {
+          var list = Array.prototype.map.call(
+            $("defaultCols").querySelectorAll("input:checked"),
+            function (x) { return x.dataset.col; });
+          if (!list.length) { cb.checked = true; return; }
+          setState({ cols: list });
+          api("set_columns", list).then(function () { renderColMenu(); });
+        });
+      });
+  }
+
+  function loadSettings() {
+    api("get_settings").then(function (s) {
+      if (!s) return;
+      if (document.activeElement !== $("excludeBox"))
+        $("excludeBox").value = s.exclude_words || "";
+      if (document.activeElement !== $("minBox"))
+        $("minBox").value = s.min_price || "";
+      renderExclChips();
+      renderRefreshSeg(s.refresh_sec == null ? 600 : s.refresh_sec);
+      renderDefaultCols();
+    });
+  }
+
+  $("saveAdvBtn").addEventListener("click", function () {
+    api("set_advanced", $("excludeBox").value, $("minBox").value)
+      .then(function () {
+        api("get_settings").then(function (s) {
+          // The advanced minimum is part of the same filter pipeline.
+          state.minPrice = (s && s.min_price) || "";
+          if (document.activeElement !== $("minBox"))
+            $("minBox").value = state.minPrice;
+          $("settingsSavedAt").textContent = new Date().toLocaleString("ar-EG");
+          toast("تم حفظ الإعدادات");
+          apply();
+        });
+      });
+  });
+
+  /* ---- in-app update ----
+     There is no permanent update control anywhere. On launch the app asks
+     the version file once, quietly, and only then does a rail icon appear in
+     the sidebar. If the build is current, nothing is shown at all. */
+  (function updateRail() {
+    var railBtn = $("updateRailBtn");
+    if (!railBtn) return;
+
+    api("app_version").then(function (v) {
+      if (v && v.version) $("railVer").textContent = "v" + v.version;
+    });
+
+    function show(msg) { toast(msg); }
+
+    // Checked after the first paint so a slow or dead server can never hold
+    // up the window the user is trying to work in.
+    function check() {
+      api("check_update").then(function (r) {
+        if (!r || !r.has_update) return;   // current, or offline: stay silent
+        railBtn.classList.remove("hidden");
+        railBtn.title = "في نسخة جديدة: " + r.latest;
+      });
+    }
+
+    railBtn.addEventListener("click", function () {
+      if (!window.confirm("سيتم إغلاق البرنامج الآن حتى يتم تحديث نفسه. هل تريد المتابعة؟"))
+        return;
+      railBtn.disabled = true;
+      show("يجري تحميل التحديث…");
+      api("install_update").then(function (r) {
+        if (!r || !r.ok) {
+          railBtn.disabled = false;
+          show((r && r.message) || "فشل التحديث، يُرجى المحاولة لاحقًا");
+          return;
+        }
+        // The backend closes the window itself once the installer is running.
+        show(r.message || "يجري التحديث…");
+      });
+    });
+
+    setTimeout(check, 2500);
+  })();
+
+  function siteQuery() {
+    return ($("siteSearch").value || "").trim().toLowerCase();
+  }
+  $("siteSearch").addEventListener("input", function () { loadSites(); });
+  $("sitesRefreshBtn").addEventListener("click", function () {
+    loadSites(); poll();
+  });
+
+  function renderSiteStats(sites) {
+    var on = sites.filter(function (s) { return s.enabled !== false; });
+    var ok = sites.filter(function (s) { return s.status === "ok"; }).length;
+    var durs = sites.map(function (s) { return s.duration_sec || 0; })
+      .filter(function (d) { return d > 0; });
+    var avg = durs.length
+      ? (durs.reduce(function (a, b) { return a + b; }, 0) / durs.length).toFixed(1)
+      : null;
+    var rate = on.length ? Math.round(100 * ok / on.length) : null;
+    // Four tiles in the design's arrangement: volume, how many are live, how
+    // fast, how reliable. All four come out of the same get_sites payload.
+    var speed = avg == null ? null : Math.max(10, Math.min(100,
+      Math.round(100 - avg * 4)));
+    setHTML($("siteStats"), [
+      statCard({ label: "إجمالي المتاجر الممسوحة", value: String(sites.length),
+        foot: "100% مفعّلة", icon: "stack", tone: "blue", pct: 100 }),
+      statCard({ label: "المصادر النشطة في العمل", value: String(on.length),
+        foot: on.length ? Math.round(100 * on.length / sites.length) + "% مفعّلة"
+                        : "لا يوجد مفعّل",
+        icon: "check", tone: "green", green: true,
+        pct: sites.length ? Math.round(100 * on.length / sites.length) : 0 }),
+      statCard({ label: "متوسط سرعة الاستخراج",
+        value: avg == null ? "—" : avg + " ثانية",
+        foot: avg == null ? "بانتظار أول بحث" : "لكل موقع",
+        icon: "speed", tone: speed == null ? "" : speed >= 80 ? "green"
+              : speed >= 50 ? "amber" : "",
+        pct: speed, footTone: speed == null ? "" : speed >= 50 ? "" : "amber" }),
+      statCard({ label: "نسبة نجاح البحث والمطابقة",
+        value: rate == null ? "—" : rate + "%",
+        foot: ok + " موقع شغال الآن", icon: "check",
+        tone: rate == null ? "" : rate >= 80 ? "green" : rate >= 50 ? "amber" : "",
+        pct: rate == null ? 0 : rate })
+    ].join(""));
+  }
+
+  /* The search URL pattern as a code chip with the keyword placeholder picked
+     out, exactly as the design shows it. */
+  function patternHtml(p) {
+    var s = String(p || "");
+    if (!s) return '<span class="muted">—</span>';
+    return esc(s).replace(/(\{[a-z0-9_]+\})/gi, "<b>$1</b>");
+  }
+
+  /* Column set mirrors the reference sources table: pattern, then the numbers.
+     The per-store "test" and "run" buttons that design shows are deliberately
+     absent: this program has no such action. */
+  function renderSitesHead() {
+    setHTML($("sitesHead"),
+      '<th class="w12"></th>'
+      + '<th class="w28">المتجر</th>'
+      + '<th class="min280">نمط رابط البحث (Search URL Pattern)</th>'
+      + '<th class="w36">الحالة</th>'
+      + '<th class="w28 center">عدد الصفوف المستخرجة</th>'
+      + '<th class="w28">آخر زمن استخراج</th>'
+      + '<th class="w24 center">مفعّل</th>');
+  }
+  renderSitesHead();
+
+  function loadSites() {
+    api("get_sites").then(function (sites) {
+      if (!sites) return;
+      state.sites = sites;
+      renderSiteStats(sites);
+      var q = siteQuery();
+      var shown = q ? sites.filter(function (s) {
+        return (s.name + " " + (s.pattern || "")).toLowerCase().indexOf(q) >= 0;
+      }) : sites;
+      setHTML($("sitesBody"), shown.map(function (s) {
+        var dot = s.status || (s.enabled ? "idle" : "off");
+        return "<tr>"
+          + '<td class="c-pick"><span class="site-badge" aria-hidden="true">'
+          + esc(s.name.slice(0, 2)) + "</span></td>"
+          + '<td class="c-site"><b>' + esc(s.name) + "</b></td>"
+          + '<td class="c-time"><span class="pattern">'
+          + patternHtml(s.pattern) + "</span></td>"
+          + '<td><span class="pill pill-site"><span class="dot ' + esc(dot)
+          + '"></span>' + esc(SITE_STATUS[s.status] || "—") + "</span></td>"
+          + '<td class="num center">' + (s.rows || 0) + "</td>"
+          + '<td class="num">' + (s.duration_sec || 0) + " ث</td>"
+          + '<td class="center"><input type="checkbox" class="site-toggle"'
+          + ' data-site="' + esc(s.name) + '"' + (s.enabled ? " checked" : "")
+          + ' aria-label="تفعيل ' + esc(s.name) + '"></td></tr>';
+      }).join(""));
+      apply();
+    });
+  }
+
+  /* Delegated on purpose. setHTML() leaves the markup alone when it is
+     unchanged, so rebinding per element on every loadSites() would stack a new
+     listener on the same checkbox each time and fire set_site_enabled several
+     times for one click. */
+  $("sitesBody").addEventListener("change", function (e) {
+    var cb = e.target.closest(".site-toggle");
+    if (!cb) return;
+    api("set_site_enabled", cb.dataset.site, cb.checked)
+      .then(function () { loadSites(); poll(true); });
+  });
+
+  /* ------------------------------------------------------------------ *
+   * Search
+   * ------------------------------------------------------------------ */
+  function showSearching() {
+    state.wasSearching = true;
+    renderSkeletons();
+    $("searchBtn").disabled = true;
+  }
+
+  function renderSkeletons() {
+    var tb = $("tbody");
+    // +1 for the leading checkbox column the header now renders.
+    var cols = state.cols.length + 1;
+    var html = "";
+    for (var i = 0; i < 10; i++) {
+      html += '<tr class="skel-row"><td colspan="' + cols
+        + '"><div class="bar"></div></td></tr>';
+    }
+    tb.innerHTML = html;
+    tb.__html = html;
+    $("empty").classList.add("hidden");
+    $("noMatch").classList.add("hidden");
+    $("rowCount").textContent = "…";
+    $("rowTotal").textContent = "";
+  }
+
+  function doSearch() {
+    var q = $("q").value.trim();
+    showSearching();
+    toast('يجري البحث عن "' + (q || "…") + '"...');
+    api("search", q).then(function (res) {
+      if (res && res.message) toast(res.message);
+      poll(true);
+    });
+  }
+  $("searchBtn").addEventListener("click", doSearch);
+  $("q").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") doSearch();
+  });
+
+  /* ------------------------------------------------------------------ *
+   * Controls: each writes state, then re-renders. Active marks are drawn
+   * from state in render(), never toggled by the click handler.
+   * ------------------------------------------------------------------ */
+  Array.prototype.forEach.call(
+    document.querySelectorAll("#kindSeg button"), function (btn) {
+      btn.addEventListener("click", function () {
+        setState({ kind: btn.dataset.kind });
+        api("set_kind", btn.dataset.kind);
+      });
+    });
+
+  $("autoChk").addEventListener("change", function () {
+    api("set_auto", $("autoChk").checked);
+  });
+  ["fMin", "fMax", "fDisc"].forEach(function (id) {
+    $(id).addEventListener("input", function () {
+      setState({ fMin: $("fMin").value, fMax: $("fMax").value,
+                 fDisc: $("fDisc").value });
+    });
+    $(id).addEventListener("change", function () {
+      api("set_view_filters", $("fMin").value, $("fMax").value,
+        $("fDisc").value);
+    });
+  });
+
+  $("liveFilter").addEventListener("input", function () {
+    setState({ query: $("liveFilter").value });
+  });
+
+  function resetFilters() {
+    setState({
+      kind: KIND_DEVICES,
+      fMin: "", fMax: "", fDisc: "", minPrice: "", query: "",
+      siteOn: enabledMap(),
+      cols: DEFAULT_COLS.slice(),
+      sort: { key: "discount", dir: -1 },
+      selected: {}, anchor: -1
+    });
+    $("fMin").value = ""; $("fMax").value = ""; $("fDisc").value = "";
+    $("liveFilter").value = "";
+    api("set_kind", state.kind);
+    api("set_view_filters", "", "", "");
+    renderColMenu();
+    toast("رجعت كل الفلاتر");
+  }
+  $("resetFiltersBtn").addEventListener("click", resetFilters);
+
+  /* ------------------------------------------------------------------ *
+   * Column menu
+   * ------------------------------------------------------------------ */
+  /* The trigger lives inside the search field, so the menu is placed under it
+     with inline-start/end rather than left, to stay on the right in RTL. */
+  function closeColMenu() { $("colMenu").classList.add("hidden"); }
+
+  $("colBtn").addEventListener("click", function (e) {
+    e.stopPropagation();
+    var menu = $("colMenu");
+    if (!menu.classList.contains("hidden")) { closeColMenu(); return; }
+    var r = $("colBtn").getBoundingClientRect();
+    menu.style.top = (r.bottom + 6) + "px";
+    menu.style.insetInlineEnd = Math.max(8, window.innerWidth - r.right) + "px";
+    menu.classList.remove("hidden");
+  });
+  window.addEventListener("resize", closeColMenu);
+  document.addEventListener("click", function (e) {
+    if (!$("colMenu").classList.contains("hidden")
+      && !e.target.closest(".colmenu-wrap")) {
+      closeColMenu();
+    }
+  });
+
+  function renderColMenu() {
+    setHTML($("colMenu"), COLUMNS.map(function (c) {
+      return '<label><input type="checkbox" data-col="' + c.key + '"'
+        + (state.cols.indexOf(c.key) >= 0 ? " checked" : "")
+        + "> " + (c.label || "صورة") + "</label>";
+    }).join(""));
+    Array.prototype.forEach.call(
+      $("colMenu").querySelectorAll("input"), function (cb) {
+        cb.addEventListener("change", function () {
+          var list = Array.prototype.map.call(
+            $("colMenu").querySelectorAll("input:checked"),
+            function (x) { return x.dataset.col; });
+          if (!list.length) {          // never allow an empty table
+            cb.checked = true;
+            toast("يجب إبقاء عمود واحد على الأقل");
+            return;
+          }
+          setState({ cols: list });
+          api("set_columns", list);
+        });
+      });
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Exports: always the rows currently on screen.
+   * ------------------------------------------------------------------ */
+  function selectedLinks() {
+    return Object.keys(state.selected).filter(function (k) {
+      return state.selected[k];
+    });
+  }
+
+  /* Every link currently drawn, in display order. The header checkbox selects
+     across the whole result set, since all of it is on one scrollable page now. */
+  function pageLinks() {
+    return computeView(state.rows, state).rows.map(function (r) {
+      return r.link;
+    });
+  }
+  function pageAllSelected() {
+    var ls = pageLinks();
+    return ls.length > 0 && ls.every(function (l) { return state.selected[l]; });
+  }
+  function pageSomeSelected() {
+    var ls = pageLinks(), n = 0;
+    ls.forEach(function (l) { if (state.selected[l]) n++; });
+    return n > 0 && n < ls.length;
+  }
+  function togglePageSelect(on) {
+    pageLinks().forEach(function (l) {
+      if (on) state.selected[l] = true;
+      else delete state.selected[l];
+    });
+    apply();
+  }
+  function toggleOne(link, on) {
+    if (on) state.selected[link] = true;
+    else delete state.selected[link];
+    apply();
+  }
+
+  function exportView(mode) {
+    var links = mode === "selected" ? selectedLinks() : viewLinks();
+    if (!links.length) {
+      toast("لا توجد صفوف للتصدير");
+      return;
+    }
+    api("export_excel", "links", links).then(toastSaved);
+  }
+  function viewLinks() {
+    return view().rows.map(function (r) { return r.link; });
+  }
+
+  $("expAllBtn").addEventListener("click", function () {
+    api("export_excel", "all", []).then(toastSaved);
+  });
+  $("expViewBtn").addEventListener("click", function () {
+    exportView("view");
+  });
+  $("expSelBtn").addEventListener("click", function () {
+    exportView("selected");
+  });
+  $("expCsvBtn").addEventListener("click", function () {
+    api("export_csv", "links", viewLinks()).then(toastSaved);
+  });
+  $("exportBtn").addEventListener("click", function () {
+    exportView("view");
+  });
+  $("openBtn").addEventListener("click", openFile);
+  $("openBtn2").addEventListener("click", openFile);
+  function openFile() {
+    api("open_excel").then(function (res) {
+      if (res && !res.ok && res.message) toast(res.message);
+    });
+  }
+
+  $("copySelBtn").addEventListener("click", function () {
+    var links = selectedLinks();
+    if (!links.length) { toast("يُرجى تحديد الصفوف أولًا"); return; }
+    var byLink = {};
+    state.rows.forEach(function (r) { byLink[r.link] = r; });
+    var head = ["Site", "Product Title", "Price Before", "Price After",
+      "Discount %", "Product Link", "Scraped At"];
+    var lines = [head.join("\t")];
+    links.forEach(function (k) {
+      var r = byLink[k];
+      if (!r) return;
+      lines.push([r.site, r.title, r.before, r.after, r.discount, r.link,
+        r.timestamp].map(function (v) {
+          return String(v == null ? "" : v).replace(/\t/g, " ");
+        }).join("\t"));
+    });
+    var text = lines.join("\n");
+    function done() { toast("تم نسخ " + (lines.length - 1) + " صف"); }
+    function fallback() {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); done(); } catch (e) { /* noop */ }
+      ta.remove();
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else {
+      fallback();
+    }
+  });
+
+  /* ------------------------------------------------------------------ *
+   * Render
+   * ------------------------------------------------------------------ */
+  function renderHead() {
+    var pick = '<th class="c-pick" scope="col">'
+      + '<input type="checkbox" id="pickAll" aria-label="تحديد كل صفوف الصفحة">'
+      + "</th>";
+    setHTML($("headRow"), pick + orderCols(state.cols).map(function (key) {
+      var col = COLUMNS.filter(function (c) { return c.key === key; })[0];
+      var arrow = state.sort.key === key
+        ? '<span class="arrow">' + (state.sort.dir === 1 ? "▲" : "▼") + "</span>"
+        : "";
+      var cls = COL_WIDTH[key] || "";
+      if (COL_ALIGN[key]) cls += " " + COL_ALIGN[key];
+      if (key === "title") cls += " min280";
+      var sortable = !NO_SORT[key];
+      return '<th class="' + cls.trim() + (sortable ? " sortable" : "") + '"'
+        + (sortable ? ' data-sortkey="' + key + '" tabindex="0"' : "")
+        + ' scope="col">' + (col ? col.label : "") + arrow + "</th>";
+    }).join(""));
+    // Mirror the page selection onto the header box. The listener itself is
+    // delegated below, because the header row is rebuilt on every render and a
+    // per-element listener would be attached again each time.
+    var all = $("pickAll");
+    if (all) {
+      all.checked = pageAllSelected();
+      all.indeterminate = pageSomeSelected();
+    }
+  }
+
+  /* One delegated handler on the stable container: sorting survives any
+     re-render of the header row. */
+  $("headRow").addEventListener("click", function (e) {
+    var th = e.target.closest("[data-sortkey]");
+    if (!th) return;
+    toggleSort(th.dataset.sortkey);
+  });
+  $("headRow").addEventListener("keydown", function (e) {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    var th = e.target.closest("[data-sortkey]");
+    if (!th) return;
+    e.preventDefault();
+    toggleSort(th.dataset.sortkey);
+  });
+  /* Select-all lives on the header checkbox, so its handler is delegated for
+     the same reason the sort handlers are. */
+  $("headRow").addEventListener("change", function (e) {
+    if (!e.target.matches("#pickAll")) return;
+    togglePageSelect(e.target.checked);
+  });
+
+  function toggleSort(k) {
+    // First click on a column sorts ascending, the next one reverses it.
+    var dir = state.sort.key === k ? -state.sort.dir : 1;
+    setState({ sort: { key: k, dir: dir } });
+  }
+
+  function renderKind() {
+    Array.prototype.forEach.call(
+      document.querySelectorAll("#kindSeg button"), function (b) {
+        b.classList.toggle("active", b.dataset.kind === state.kind);
+      });
+  }
+
+  function renderChips(v) {
+    var box = $("siteChips");
+    if (!state.sites.length) { setHTML(box, ""); return; }
+    var stats = (state.status && state.status.site_stats) || {};
+    setHTML(box, state.sites.map(function (s) {
+      var st = stats[s.name] || {};
+      var dot = st.status || (s.enabled ? "idle" : "off");
+      var on = state.siteOn[s.name] !== false;
+      var count = v.bySite[s.name] || 0;
+      var meta = st.status === "ok" || st.status === "slow"
+        ? st.rows + " صف • " + st.duration_sec + "ث" : "";
+      return '<button class="chip' + (on ? "" : " off") + '"'
+        + ' data-site="' + esc(s.name) + '"'
+        + ' aria-pressed="' + on + '"'
+        + (s.enabled ? "" : ' disabled title="مقفول من صفحة المصادر"') + ">"
+        + '<span class="dot ' + esc(dot) + '"></span>' + esc(s.name)
+        + ' <span class="meta">' + count + (meta ? " • " + meta : "")
+        + "</span></button>";
+    }).join(""));
+  }
+
+  $("siteChips").addEventListener("click", function (e) {
+    var chip = e.target.closest(".chip");
+    if (!chip || chip.disabled) return;
+    var name = chip.dataset.site;
+    var site = state.sites.filter(function (s) {
+      return s.name === name;
+    })[0];
+    if (!site || site.enabled === false) return;
+    var next = {};
+    state.sites.forEach(function (s) {
+      next[s.name] = state.siteOn[s.name] !== false;
+    });
+    next[name] = !next[name];
+    setState({ siteOn: next });
+  });
+
+  function changeHtml(r) {
+    if (r.enriching) {
+      return ' <span class="chg-busy" title="يجري التأكد من الكوبون">'
+        + "…</span>";
+    }
+    var c = r.change;
+    if (c != null && c !== 0) {
+      var down = c < 0;
+      return ' <span class="' + (down ? "chg-down" : "chg-up") + '">'
+        + (down ? "↓ " : "↑ ") + Math.abs(c).toLocaleString("en-US") + "</span>";
+    }
+    return "";
+  }
+
+  function couponChip(note) {
+    var m = /coupon\s+(\S+)\s+(-[\d.]+%)/.exec(note || "");
+    if (m) {
+      return '<span class="pill-coupon">' + esc(m[1]) + " " + esc(m[2])
+        + "</span>";
+    }
+    if ((note || "").indexOf("coupon") >= 0) {
+      return '<span class="pill-coupon">كوبون</span>';
+    }
+    return '<span class="c-disc none">—</span>';
+  }
+
+  function cellHtml(r, key) {
+    if (key === "image") {
+      return r.image
+        ? '<img src="' + esc(r.image) + '" alt="" loading="lazy"'
+          + ' onerror="this.remove()">'
+        : '<span class="thumb-empty"></span>';
+    }
+    if (key === "site") return '<span class="pill pill-site">'
+      + '<span class="dot ok"></span>' + esc(r.site) + "</span>";
+    if (key === "title") return esc(r.title);
+    if (key === "before") {
+      // Struck through and muted, as in the design: it is history, not a price.
+      return '<span class="was">' + money(r.before) + "</span>";
+    }
+    if (key === "after") {
+      // Main price on top, the money saved underneath. The saving is the gap
+      // between the two prices; the change-vs-last-run marker stays beside it
+      // so a real price drop is still visible.
+      var b = toNum(r.before), a = toNum(r.after);
+      var sub = "";
+      if (b != null && a != null && b - a > 0.5) {
+        sub = '<div class="after-sub">▼ ' + money(b - a) + " " + CURRENCY + "</div>";
+      }
+      return '<div class="after-main">' + money(r.after) + " " + CURRENCY + "</div>"
+        + sub + changeHtml(r);
+    }
+    if (key === "discount") {
+      return (toNum(r.discount) || 0) > 0
+        ? '<span class="c-disc has">' + r.discount + "%-</span>"
+        : '<span class="c-disc none">—</span>';
+    }
+    if (key === "link") {
+      return '<button class="icon-btn" data-open="' + esc(r.link)
+        + '" aria-label="فتح الرابط">'
+        + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+        + ' stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+        + '<path d="M14 4h6v6"/><path d="M20 4L10 14"/>'
+        + '<path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/>'
+        + "</svg></button>";
+    }
+    if (key === "time") {
+      var raw = esc(r.timestamp);
+      return '<span title="' + raw + '">' + esc(timeAgo(r.timestamp))
+        + "</span>";
+    }
+    if (key === "note") return couponChip(r.note);
+    return "";
+  }
+
+  function cellClass(key) {
+    var cls = [];
+    if (key === "image") cls.push("c-thumb");
+    if (key === "site") cls.push("c-site");
+    if (key === "title") cls.push("c-title");
+    if (key === "before") cls.push("c-before");
+    if (key === "before" || key === "after" || key === "discount") {
+      cls.push("num");
+    }
+    if (key === "after") cls.push("c-after");
+    if (key === "discount") cls.push("c-disc");
+    if (key === "link") cls.push("c-link");
+    if (key === "time") cls.push("c-time");
+    if (key === "note") cls.push("c-note");
+    return cls.join(" ");
+  }
+
+  function render() {
+    var st = state.status || {};
+    renderHead();
+    renderKind();
+    var v = computeView(state.rows, state);
+    var tb = $("tbody");
+
+    if (st.searching && !state.rows.length) {
+      renderSkeletons();
+      return;
+    }
+    if (!state.rows.length) {
+      setHTML(tb, "");
+      $("noMatch").classList.add("hidden");
+      $("empty").classList.remove("hidden");
+      $("empty").querySelector("h3").textContent = st.last_query
+        ? "لا توجد نتائج — يُرجى تجربة كلمة بحث أخرى"
+        : "اكتب كلمة البحث في الحقل أعلاه ثم اضغط على زر البحث";
+      $("rowCount").textContent = "";
+      $("rowTotal").textContent = "";
+      $("summary").innerHTML = "";
+      $("sectionTitle").textContent = st.last_query
+        ? 'نتائج "' + st.last_query + '"' : "نتائج البحث";
+      renderChips(v);
+      renderSel();
+      return;
+    }
+
+    $("empty").classList.add("hidden");
+    $("sectionTitle").textContent = st.last_query
+      ? 'نتائج "' + st.last_query + '"' : "نتائج البحث";
+
+    if (!v.rows.length) {
+      // Filters left nothing: name the active filters so it is obvious which
+      // one to relax, and offer one click back to all rows.
+      setHTML(tb, "");
+      $("noMatch").classList.remove("hidden");
+      $("rowCount").textContent = "0 صف";
+      $("rowTotal").textContent = "";
+      $("summary").textContent = "";
+      var why = [];
+      if (state.query) why.push("نص: " + state.query);
+      if (toNum(state.fMin) != null) why.push("الأدنى ≥ " + money(state.fMin));
+      if (toNum(state.fMax) != null) why.push("الأقصى ≤ " + money(state.fMax));
+      if (toNum(state.fDisc) != null) why.push("الخصم ≥ " + state.fDisc + "%");
+      if (toNum(state.minPrice) != null)
+        why.push("الحد اليدوي ≥ " + money(state.minPrice));
+      var offSites = Object.keys(state.siteOn).filter(function (n) {
+        return state.siteOn[n] === false;
+      });
+      if (offSites.length) why.push("متاجر مقفولة: " + offSites.join("، "));
+      var w = $("noMatchWhy");
+      if (w) {
+        w.textContent = why.length
+          ? "الفلاتر النشطة: " + why.join(" • ")
+          : "يُرجى تجربة كلمة بحث أخرى أو اختيار الكل";
+      }
+      renderChips(v);
+      renderSel();
+      return;
+    }
+    $("noMatch").classList.add("hidden");
+
+    // Selection can only hold rows that are actually visible.
+    var visible = {};
+    v.rows.forEach(function (r) { visible[r.link] = true; });
+    Object.keys(state.selected).forEach(function (k) {
+      if (!visible[k]) delete state.selected[k];
+    });
+
+    /* Every matching row is drawn at once; the table scrolls instead of
+       paging. Paging was hiding results behind numbered buttons, which is the
+       opposite of what a price comparison is for — you want to scan the whole
+       market, then sort or filter it down. */
+    var slice = v.rows;
+    var cols = orderCols(state.cols);
+
+    setHTML(tb, slice.map(function (r) {
+      var tds = '<td class="c-pick">'
+        + '<input type="checkbox" data-pick="' + esc(r.link) + '"'
+        + (state.selected[r.link] ? " checked" : "")
+        + ' aria-label="تحديد الصف"></td>' + cols.map(function (key) {
+        var extra = key === "title" ? ' title="' + esc(r.title) + '"' : "";
+        var cls = cellClass(key);
+        if (COL_ALIGN[key]) cls += " " + COL_ALIGN[key];
+        return '<td class="' + cls.trim() + '"' + extra + ">"
+          + cellHtml(r, key) + "</td>";
+      }).join("");
+      return '<tr data-link="' + esc(r.link) + '"'
+        + (state.selected[r.link] ? ' class="selected"' : "")
+        + ">" + tds + "</tr>";
+    }).join(""));
+
+    /* Summary numbers come from the same computed view as the table. */
+    var disc = v.rows.filter(function (r) { return (toNum(r.discount) || 0) > 0; });
+    var sum = disc.reduce(function (s, r) { return s + (toNum(r.discount) || 0); }, 0);
+    var prices = v.rows.map(function (r) { return toNum(r.after); })
+      .filter(function (x) { return x != null; });
+    /* The ribbon above already carries every number, so these two lines only
+       state how many rows are drawn versus how many came back — no duplicated
+       statistics. */
+    $("rowCount").textContent = "عرض " + v.rows.length + " من "
+      + state.rows.length;
+    $("rowTotal").textContent = v.rows.length === state.rows.length
+      ? "كل المنتجات المعروضة (" + v.rows.length + ")"
+      : "المعروض " + v.rows.length + " من " + state.rows.length + " منتج";
+    /* The ribbon and the previous-price column are the places a min/max is
+       read, so the suffix belongs on the current price and its saving line —
+       the same two lines the reference puts it on. */
+    $("summary").textContent = "";
+
+    renderChips(v);
+    renderStatCards(v, st);
+    renderSel();
+    renderFileInfo();
+  }
+
+
+  function renderEngine(st) {
+    var dot = $("engineDot"), txt = $("engineText");
+    if (!dot || !txt) return;
+    if (st.searching) {
+      dot.className = "dot slow";
+      txt.textContent = "محرك الاستخراج: شغال…";
+    } else if (st.failed && st.failed.length) {
+      dot.className = "dot slow";
+      txt.textContent = "محرك الاستخراج: متصل (موقع واقع)";
+    } else if (st.search_count > 0) {
+      dot.className = "dot ok";
+      txt.textContent = "محرك الاستخراج: متصل";
+    } else {
+      dot.className = "dot idle";
+      txt.textContent = "محرك الاستخراج: جاهز";
+    }
+  }
+
+  function renderStatCards(v, st) {
+    function set(id, val) { var el = $(id); if (el) el.textContent = val; }
+    var disc = v.rows.filter(function (r) { return (toNum(r.discount) || 0) > 0; });
+    var sum = disc.reduce(function (s, r) { return s + (toNum(r.discount) || 0); }, 0);
+    var prices = v.rows.map(function (r) { return toNum(r.after); })
+      .filter(function (x) { return x != null; });
+    set("statTotal", v.rows.length ? v.rows.length + " نتيجة" : "—");
+    set("statDisc", disc.length ? disc.length + " نتيجة" : "—");
+    set("statAvg", disc.length ? (sum / disc.length).toFixed(1) + "%" : "—");
+    set("statMin", prices.length ? money(Math.min.apply(null, prices)) + " " + CURRENCY : "—");
+    set("statMax", prices.length ? money(Math.max.apply(null, prices)) + " " + CURRENCY : "—");
+    // Relative age with the clock time kept alongside, as the design shows it.
+    var upd = st.updated_at || "";
+    var clock = /(\d{2}:\d{2}:\d{2})/.exec(upd);
+    set("statUpdated", upd
+      ? timeAgo(upd) + (clock ? " (" + clock[1] + ")" : "")
+      : "—");
+  }
+
+  /* One metric tile, built the way the design builds it: label and icon on the
+     top line, the big value and a delta underneath, then a progress rule.
+     `tone` colours the icon and the rule. */
+  function statCard(opt) {
+    var bar = opt.pct == null ? ""
+      : '<span class="stat-bar"><i class="' + (opt.tone || "") + '" style="width:'
+        + opt.pct + '%"></i></span>';
+    return '<div class="stat-card' + (opt.flat ? " flat" : "") + '">'
+      + '<div class="stat-top"><span class="stat-label">' + esc(opt.label)
+      + '</span><span class="stat-icon ' + (opt.tone || "") + '">'
+      + ICON[opt.icon] + "</span></div>"
+      + '<div class="stat-bot"><b class="' + (opt.green ? "green" : "") + '">'
+      + esc(opt.value) + '</b><span class="stat-foot '
+      + (opt.footTone || "") + '">' + esc(opt.foot || "") + "</span></div>"
+      + bar + "</div>";
+  }
+
+  /* Inline SVG in place of the reference's Material Symbols ligatures. Same
+     glyph set, same sizes, no icon font to ship. */
+  var ICON = {
+    radar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 12l5-3"/><circle cx="12" cy="12" r="1.5"/></svg>',
+    stack: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16"/></svg>',
+    speed: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 12l4-4"/><path d="M12 3v2M21 12h-2M12 21v-2M3 12h2"/></svg>',
+    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9.5"/></svg>',
+    box: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+    clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+    pulse: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg>',
+    tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l9-9h9v9l-9 9z"/><circle cx="16.5" cy="7.5" r="1.5"/></svg>'
+  };
+
+  function renderStatusPage(st) {
+    var stats = (st && st.site_stats) || {};
+    var names = Object.keys(stats);
+    var ok = names.filter(function (k) { return stats[k].status === "ok"; }).length;
+    var enabled = state.sites.filter(function (s) {
+      return s.enabled !== false;
+    }).length;
+    setHTML($("engineCards"), [
+      statCard({ label: "مواقع مفعّلة", value: String(enabled),
+        foot: "من " + state.sites.length + " مسجل", icon: "stack",
+        tone: "blue", flat: true,
+        pct: state.sites.length ? Math.round(100 * enabled / state.sites.length) : 0 }),
+      statCard({ label: "شغالة الآن", value: String(ok),
+        foot: ok ? "محرك شغال" : "في انتظار بحث", icon: "pulse",
+        tone: ok ? "green" : "amber", green: !!ok, flat: true,
+        pct: state.sites.length ? Math.round(100 * ok / state.sites.length) : 0 }),
+      statCard({ label: "مرات البحث", value: String(st.search_count || 0),
+        foot: st.failed && st.failed.length ? st.failed.length + " موقع واقع"
+                                            : "من غير أخطاء",
+        icon: "radar", tone: st.failed && st.failed.length ? "amber" : "blue",
+        flat: true, pct: null }),
+      statCard({ label: "آخر تحديث", value: timeAgo(st.updated_at || "") || "—",
+        foot: (st.updated_at || "").slice(11) || "", icon: "clock",
+        tone: "blue", flat: true, pct: null })
+    ].join(""));
+  }
+
+  function refreshLogs() {
+    api("get_logs", 60).then(function (lines) {
+      var box = $("logBox");
+      if (!box) return;
+      box.textContent = (lines && lines.length)
+        ? lines.join("\n") : "لا يوجد سجل بعد.";
+      box.scrollTop = box.scrollHeight;
+    });
+  }
+  $("logRefreshBtn").addEventListener("click", refreshLogs);
+
+  function renderSel() {
+    renderEngine(state.status || {});
+    var lv = $("liveBadge");
+    if (lv) {
+      var st = state.status || {};
+      lv.classList.toggle("hidden",
+        !(st.search_count > 0 && !st.searching && state.rows.length > 0));
+    }
+    if ($("page-status").classList.contains("active")) {
+      renderStatusPage(state.status || {});
+    }
+    var n = selectedLinks().length;
+    $("selCount").textContent = n ? "المحدد: " + n : "";
+    $("copySelBtn").disabled = !n;
+    $("expSelBtn").disabled = !n;
+    Array.prototype.forEach.call(
+      document.querySelectorAll("#tbody tr[data-link]"), function (tr) {
+        tr.classList.toggle("selected", !!state.selected[tr.dataset.link]);
+      });
+  }
+
+  /* Row selection and the open-link button, delegated on the tbody so the
+     handlers keep working whenever the rows are redrawn. */
+  $("tbody").addEventListener("click", function (e) {
+    var pick = e.target.closest("[data-pick]");
+    if (pick) {
+      // A checkbox drives selection only; it must not also fire the row click,
+      // which would clear the selection it just made.
+      e.stopPropagation();
+      toggleOne(pick.dataset.pick, pick.checked);
+      return;
+    }
+    var open = e.target.closest("[data-open]");
+    if (open) {
+      e.stopPropagation();
+      api("open_link", open.dataset.open);
+      return;
+    }
+    var tr = e.target.closest("tr[data-link]");
+    if (!tr) return;
+    var link = tr.dataset.link;
+    var rows = document.querySelectorAll("#tbody tr[data-link]");
+    var gi = Array.prototype.indexOf.call(rows, tr);
+    if (e.ctrlKey || e.metaKey) {
+      if (state.selected[link]) delete state.selected[link];
+      else state.selected[link] = true;
+      state.anchor = gi;
+    } else if (e.shiftKey && state.anchor >= 0) {
+      var v = computeView(state.rows, state);
+      var a = Math.min(state.anchor, gi), b = Math.max(state.anchor, gi);
+      for (var i = a; i <= b && i < v.rows.length; i++) {
+        state.selected[v.rows[i].link] = true;
+      }
+    } else {
+      state.selected = {};
+      state.selected[link] = true;
+      state.anchor = gi;
+    }
+    apply();
+  });
+
+  /* ------------------------------------------------------------------ *
+   * Polling: cheap status every second, rows only when they changed.
+   * ------------------------------------------------------------------ */
+  function fmtCountdown(sec) {
+    if (sec == null) return "";
+    var m = Math.floor(sec / 60), s = sec % 60;
+    return "التحديث بعد " + m + ":" + String(s).padStart(2, "0");
+  }
+
+  function syncChrome(st) {
+    if (!st) return;
+    if (document.activeElement !== $("autoChk"))
+      $("autoChk").checked = !!st.auto_refresh;
+    $("countdown").textContent = fmtCountdown(st.countdown_sec);
+    $("searchBtn").disabled = !!st.searching;
+  }
+
+  function syncFromStatus(st) {
+    if (!st) return;
+    var first = !state.status;
+    state.status = st;
+    if (st.message && st.message !== state.lastMsg) {
+      state.lastMsg = st.message;
+      if (!first) toast(st.message);
+    }
+    syncChrome(st);
+    if (st.searching !== state.wasSearching) {
+      state.wasSearching = st.searching;
+      apply();
+    }
+    if (state.pinned) return;   // a test fixture owns the rows
+    var token = st.rows_token;
+    if (token !== undefined && token !== state.rowsToken) {
+      state.rowsToken = token;
+      api("get_results").then(function (rows) {
+        if (!rows) return;
+        var firstLoad = !state.rows.length;
+        state.rows = rows;
+        state.selected = {};
+        state.anchor = -1;
+        apply();
+      });
+    }
+  }
+
+  function poll() {
+    api("get_status").then(syncFromStatus);
+  }
+
+  /* Python pushes this for status-only updates (a site starting/finishing). */
+  window.__pushStatus = function () { poll(); };
+  window.__pushResults = function () { poll(); };
+
+  /* Test harness: inject a fixture without pywebview. The fixture is pinned so
+     the live poll cannot replace it with the app's real (empty) row set. */
+  window.__injectTest = function (rows, status, sites) {
+    state.pinned = true;
+    state.rows = rows || [];
+    state.status = status || state.status;
+    if (sites) {
+      state.sites = sites;
+      state.siteOn = enabledMap();
+    }
+    if (status && status.rows_token !== undefined)
+      state.rowsToken = status.rows_token;
+    if (state.status && state.status.searching) renderSkeletons();
+    syncChrome(state.status);
+    render();
+    return state.rows.length;
+  };
+  window.__unpinTest = function () { state.pinned = false; poll(); };
+  window.__state = function () { return state; };
+  window.__view = function () { return computeView(state.rows, state); };
+
+  function enabledMap() {
+    var m = {};
+    state.sites.forEach(function (s) { if (s.enabled !== false) m[s.name] = true; });
+    return m;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Boot
+   * ------------------------------------------------------------------ */
+  /* The page can finish loading before pywebview injects its API. Waiting for
+     it here is what makes the site chips, saved columns and saved filters
+     appear at all; anything fetched before then would silently vanish. */
+  function waitForBridge(cb, tries) {
+    tries = tries || 200;
+    if (bridge()) { cb(); return; }
+    if (tries <= 0) {
+      reportJsError("pywebview bridge never appeared");
+      toast("تعذّر الاتصال بالبرنامج، يُرجى إغلاق النافذة وإعادة فتحها");
+      return;
+    }
+    setTimeout(function () { waitForBridge(cb, tries - 1); }, 100);
+  }
+
+  var loaded = false;
+  function loadAll() {
+    if (loaded) return;
+    loaded = true;
+    api("get_sites").then(function (sites) {
+      if (sites) {
+        state.sites = sites;
+        state.siteOn = enabledMap();
+        apply();
+      }
+    });
+    api("get_settings").then(function (s) {
+      if (s) {
+        state.kind = s.kind || state.kind;
+        state.minPrice = s.min_price || "";
+        if (s.visible_columns && s.visible_columns.length)
+          // Normalised for display only; the saved order in settings.json is
+          // left untouched, so nothing the user configured is overwritten.
+          state.cols = orderCols(s.visible_columns);
+        if (s.f_min) $("fMin").value = state.fMin = s.f_min;
+        if (s.f_max) $("fMax").value = state.fMax = s.f_max;
+        if (s.f_disc) $("fDisc").value = state.fDisc = s.f_disc;
+        if (document.activeElement !== $("excludeBox"))
+          $("excludeBox").value = s.exclude_words || "";
+        if (document.activeElement !== $("minBox"))
+          $("minBox").value = s.min_price || "";
+      }
+      renderColMenu();
+      apply();
+    });
+    poll();
+  }
+
+  function boot() {
+    renderColMenu();
+    apply();
+    setInterval(poll, 1000);
+    window.addEventListener("pywebviewready", loadAll);
+    waitForBridge(loadAll);
+  }
+
+  boot();
+})();

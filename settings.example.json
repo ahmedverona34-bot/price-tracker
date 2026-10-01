@@ -1,0 +1,28 @@
+{
+  "_comment": "Copy to settings.json to start from these defaults. settings.json itself is gitignored because it holds whatever the local user last searched. These values mirror the defaults in price_tracker.py (load_settings / TrackerCore.__init__).",
+
+  "keyword": "",
+  "kind": "أجهزة فقط",
+  "auto_refresh": true,
+  "refresh_sec": 600,
+
+  "exclude_words": "case, cover, glass, protector, charger, cable, adapter, holder, strap, bumper, pouch, skin, wallet, stand, mount, dock, sleeve, speaker, earbuds, earphone, headphone, headset, watch, stylus, جراب, كفر, حماية, شاحن, شواحن, كابل, وصلة, سلك, لاصق, سكرين, حافظة, حامل, ستاند, سماعة, سماعات, ساعة",
+  "min_price": "",
+
+  "disabled_sites": [],
+
+  "visible_columns": [
+    "site",
+    "title",
+    "before",
+    "after",
+    "discount",
+    "link",
+    "time",
+    "note"
+  ],
+
+  "f_min": "",
+  "f_max": "",
+  "f_disc": ""
+}

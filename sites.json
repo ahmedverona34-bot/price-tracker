@@ -1,0 +1,35 @@
+{
+  "sites": [
+    {
+      "name": "2B Egypt",
+      "search_url": "https://2b.com.eg/en/catalogsearch/result/?q={q}",
+      "item": "li.item.product.product-item",
+      "title": "a.product-item-link",
+      "price_now": ".special-price .price",
+      "price_old": ".old-price .price",
+      "link": "a.product-item-link",
+      "image": "img.product-image-photo"
+    },
+    {
+      "name": "Dubai Phone",
+      "search_url": "https://www.dubaiphone.net/search-results?q={q}",
+      "item": "article.nf-product-card",
+      "title": "h3.dp-product-title",
+      "price_now": "span.font-manrope",
+      "price_old": "",
+      "link": "a[href*='/shop/']",
+      "image": "img",
+      "use_playwright": false,
+      "paginate": { "param": "page", "max_pages": 5 },
+      "page_delay": [0.4, 0.9],
+      "coupon_badge": true,
+      "detail_pages": true,
+      "detail_cap": 16,
+      "detail_batch": 6,
+      "detail_workers": 6,
+      "detail_timeout_ms": 30000,
+      "detail_delay": [0.3, 0.9],
+      "refresh_sec": 1800
+    }
+  ]
+}

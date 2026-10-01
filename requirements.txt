@@ -1,0 +1,20 @@
+# Runtime dependencies for Price Tracker (متتبع الأسعار).
+#
+# Pinned to the versions verified working in this project's environment
+# (Windows 11, Python 3.12). Install with:
+#     pip install -r requirements.txt
+#
+# build_exe.bat additionally needs pyinstaller (see requirements-build.txt),
+# and a site that sets "use_playwright": true in sites.json needs playwright.
+
+requests==2.34.2
+beautifulsoup4==4.15.0
+openpyxl==3.1.5
+
+# pywebview opens the native window through Edge WebView2. On Windows it
+# loads that control via pythonnet's .NET bridge, so pythonnet and
+# clr_loader are NOT optional here: without them the window fails to open
+# at all with "You must have pythonnet installed in order to use pywebview".
+pywebview==6.2.1
+pythonnet==3.2.0
+clr_loader==0.3.1

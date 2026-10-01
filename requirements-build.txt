@@ -1,0 +1,17 @@
+# Build-time dependencies, on top of requirements.txt.
+#
+# Needed only to produce the distributable exe:
+#     pip install -r requirements.txt -r requirements-build.txt
+#     build_exe.bat      -> dist\PriceTracker\PriceTracker.exe
+#     build_setup.bat    -> dist-installer\PriceTracker-Setup-1.0.0.exe
+#
+# build_setup.bat additionally requires Inno Setup 6 (ISCC.exe):
+#     winget install JRSoftware.InnoSetup
+
+pyinstaller==6.22.3
+
+# Optional. Only needed for a site that sets "use_playwright": true in
+# sites.json, and it is deliberately NOT bundled into the exe: it carries a
+# private copy of node (~89 MB) and no currently configured site needs it.
+# That exclusion is what keeps the packaged build at ~25 MB instead of ~128 MB.
+# playwright==1.63.0

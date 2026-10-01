@@ -1,0 +1,134 @@
+/* ===========================================================================
+   Design tokens — the Stitch "Price Tracker Dark RTL" system, verbatim.
+   ---------------------------------------------------------------------------
+   Extracted mechanically from the `tailwind.config` object inside the design
+   system's own `code.html`, not typed by hand, so these are the values the
+   reference screens actually render.
+
+   The DESIGN.md prose section of that project lists a *different*, unused
+   palette (canvas #0B0D11, accent #2563EB, green #10B981). The theme below is
+   the one the reference screens use, and pixel-sampling those screens confirms
+   it: the page ground is #0C0E12, not #0B0D11.
+   =========================================================================== */
+
+:root {
+  /* -- colors (47, verbatim) -------------------------------------------- */
+  --background:                  #111317;
+  --surface:                     #111317;
+  --surface-dim:                 #111317;
+  --surface-bright:              #37393e;
+  --surface-container-lowest:    #0c0e12;
+  --surface-container-low:       #1a1c20;
+  --surface-container:           #1e2024;
+  --surface-container-high:      #282a2e;
+  --surface-container-highest:   #333539;
+  --surface-variant:             #333539;
+  --on-surface:                  #e2e2e8;
+  --on-surface-variant:          #c3c6d7;
+  --inverse-surface:             #e2e2e8;
+  --inverse-on-surface:          #2f3035;
+  --outline:                     #8d90a0;
+  --outline-variant:             #434655;
+  --surface-tint:                #b4c5ff;
+  --primary:                     #b4c5ff;
+  --on-primary:                  #002a78;
+  --primary-container:           #2563eb;
+  --on-primary-container:        #eeefff;
+  --inverse-primary:             #0053db;
+  --secondary:                   #4edea3;
+  --on-secondary:                #003824;
+  --secondary-container:         #00a572;
+  --on-secondary-container:      #00311f;
+  --tertiary:                    #ffb95f;
+  --on-tertiary:                 #472a00;
+  --tertiary-container:          #996100;
+  --on-tertiary-container:       #ffeedd;
+  --error:                       #ffb4ab;
+  --on-error:                    #690005;
+  --error-container:             #93000a;
+  --on-error-container:          #ffdad6;
+  --primary-fixed:               #dbe1ff;
+  --primary-fixed-dim:           #b4c5ff;
+  --on-primary-fixed:            #00174b;
+  --on-primary-fixed-variant:    #003ea8;
+  --secondary-fixed:             #6ffbbe;
+  --secondary-fixed-dim:         #4edea3;
+  --on-secondary-fixed:          #002113;
+  --on-secondary-fixed-variant:  #005236;
+  --tertiary-fixed:              #ffddb8;
+  --tertiary-fixed-dim:          #ffb95f;
+  --on-tertiary-fixed:           #2a1700;
+  --on-tertiary-fixed-variant:   #653e00;
+  --on-background:               #e2e2e8;
+
+  /* -- border radius (verbatim) ------------------------------------------ */
+  /* The theme ships these as rem, but the reference screens render them at
+     the browser's default 16px root where 0.75rem computes to 12px. They are
+     pinned in px here so the port is exact regardless of root font size. */
+  --r:        4px;       /* DEFAULT 0.25rem */
+  --r-lg:     8px;       /* 0.5rem  */
+  --r-xl:     12px;      /* 0.75rem */
+  --r-full:   9999px;
+
+  /* -- spacing (verbatim) ------------------------------------------------ */
+  --space-xs:            4px;    /* 0.25rem */
+  --space-sm:            8px;    /* 0.5rem  */
+  --space-md:            12px;   /* 0.75rem */
+  --space-lg:            16px;   /* 1rem   */
+  --space-xl:            24px;   /* 1.5rem */
+  --gutter:              16px;   /* 1rem   */
+  --gutter-desktop:      24px;   /* 1.5rem */
+  --margin:              24px;   /* 1.5rem */
+  --margin-desktop:      32px;   /* 2rem   */
+
+  /* -- elevation (from the design system's own component spec) ----------- */
+  --shadow-cta:      0 4px 14px rgba(37, 99, 235, 0.35);
+  --shadow-cta-hov:  0 6px 20px rgba(37, 99, 235, 0.50);
+  --shadow-pop:      0 8px 24px rgba(0, 0, 0, 0.55);
+  --shadow-sm:       0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md:       0 4px 6px -1px rgb(0 0 0 / 0.10), 0 2px 4px -2px rgb(0 0 0 / 0.10);
+
+  /* -- type scale (verbatim sizes/line-heights) --------------------------
+     Weights are remapped, sizes are not. The system asks for 600 in several
+     roles; Thmanyah Sans ships no 600 face, so the browser would synthesise or
+     round it anyway. Bold intent (headings, buttons, table headers) takes 700;
+     semibold labels take 500 so labels stay subordinate to the numbers.
+     Letter-spacing is dropped everywhere: the system sets 0.02em, and
+     tracking breaks Arabic letter joining. */
+  --fs-body-lg-size:  16px; --fs-body-lg-lh:  24px; --fs-body-lg-w:  400;
+  --fs-body-md-size:  14px; --fs-body-md-lh:  20px; --fs-body-md-w:  400;
+  --fs-body-sm-size:  13px; --fs-body-sm-lh:  18px; --fs-body-sm-w:  400;
+  --fs-data-metric-size: 28px; --fs-data-metric-lh: 36px; --fs-data-metric-w: 700;
+  --fs-data-mono-size:   13px; --fs-data-mono-lh:   18px; --fs-data-mono-w:   500;
+  --fs-headline-xl-size: 32px; --fs-headline-xl-lh: 40px; --fs-headline-xl-w: 700;
+  --fs-headline-lg-size: 24px; --fs-headline-lg-lh: 32px; --fs-headline-lg-w: 700;
+  --fs-headline-md-size: 20px; --fs-headline-md-lh: 28px; --fs-headline-md-w: 700;
+  --fs-headline-sm-size: 16px; --fs-headline-sm-lh: 24px; --fs-headline-sm-w: 700;
+  --fs-label-md-size:    12px; --fs-label-md-lh:    16px; --fs-label-md-w:    500;
+  --fs-label-sm-size:    11px; --fs-label-sm-lh:    14px; --fs-label-sm-w:    500;
+
+  /* -- alpha variants -----------------------------------------------------
+     The reference writes these as Tailwind slash-opacity (border-outline-
+     variant/30, bg-primary/10). They are spelled out here as rgba so the
+     computed value is identical rather than merely equivalent. */
+  --outline-20:  rgba(67, 70, 85, 0.20);
+  --outline-30:  rgba(67, 70, 85, 0.30);
+  --outline-40:  rgba(67, 70, 85, 0.40);
+  --outline-50:  rgba(67, 70, 85, 0.50);
+  --outline-60:  rgba(67, 70, 85, 0.60);
+  --outline-15:  rgba(67, 70, 85, 0.15);
+  --white-04:    rgba(255, 255, 255, 0.04);
+  --white-06:    rgba(255, 255, 255, 0.06);
+  --white-08:    rgba(255, 255, 255, 0.08);
+  --primary-10:  rgba(180, 197, 255, 0.10);
+  --primary-15:  rgba(180, 197, 255, 0.15);
+  --secondary-15: rgba(78, 222, 163, 0.15);
+  --secondary-container-30: rgba(0, 165, 114, 0.30);
+  --lowest-90:   rgba(12, 14, 18, 0.90);
+  --lowest-95:   rgba(12, 14, 18, 0.95);
+  --high-40:     rgba(40, 42, 46, 0.40);
+
+  /* -- layout constants (from the reference markup) ---------------------- */
+  --rail-w:      68px;
+  --topbar-h:    56px;   /* h-14 */
+}
