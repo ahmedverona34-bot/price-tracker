@@ -255,6 +255,27 @@ button { font-family: inherit; }
 }
 .avatar svg { width: 18px; height: 18px; }
 
+/* Theme toggle — same 32px circle language as the avatar, quiet by default. */
+.theme-btn {
+  width: 32px; height: 32px;
+  border-radius: var(--r-full);
+  background: var(--surface-container-low);
+  color: var(--on-surface-variant);
+  border: 1px solid var(--outline-20);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  cursor: pointer;
+  padding: 0;
+}
+.theme-btn:hover { background: var(--surface-container-high); color: var(--on-surface); }
+.theme-btn svg { width: 18px; height: 18px; }
+
+/* Light theme needs real hairlines where dark blends into itself. */
+[data-theme="light"] #topbar { border-bottom: 1px solid var(--outline-20); }
+[data-theme="light"] #rail { border-left: 1px solid var(--outline-20); }
+
 /* status dots */
 .dot { width: 6px; height: 6px; border-radius: var(--r-full); background: var(--outline); flex: 0 0 auto; display: inline-block; }
 .dot.ok, .dot.live { background: var(--secondary); }

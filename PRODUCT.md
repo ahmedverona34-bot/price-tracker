@@ -41,7 +41,7 @@ Runs on any Windows 10/11 machine by double-clicking `PriceTracker-Setup-<ver>.e
 
 ## Brand Commitments
 
-Product lane, not brand lane. No logo or brand system exists. Voice: plain Egyptian Arabic, no technical terms on screen. Binding user constraints: solid dark surfaces only (no glass/blur/gradients/neon), exactly one cobalt-blue accent, green reserved for discounts, 150 ms transitions, Thmanyah Sans weights 300/400/500/700/900 (never 600).
+Product lane, not brand lane. No logo or brand system exists. Voice: plain Egyptian Arabic, no technical terms on screen. Binding user constraints: two solid themes (dark + light slate, topbar toggle, persisted in settings), no glass/blur/gradients/neon, exactly one cobalt-blue accent, green reserved for discounts, 150 ms transitions, Thmanyah Sans weights 300/400/500/700/900 (never 600).
 
 ## Evidence on Hand
 

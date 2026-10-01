@@ -1554,6 +1554,8 @@ class TrackerCore:
         self.last_query = ""   # armed by the first search, see below
         self.kind = self.settings.get("kind", KIND_DEVICES)
         self.auto_refresh = self.settings.get("auto_refresh", True)
+        _theme = self.settings.get("theme", "light")
+        self.theme = _theme if _theme in ("light", "dark") else "light"
         self.searching = False
         self.search_gen = 0
         self.search_count = 0
@@ -1592,6 +1594,7 @@ class TrackerCore:
         # keyword on launch, but last_query is empty until a search runs.
         return {"keyword": self.saved_query,
                 "kind": self.kind,
+                "theme": self.theme,
                 "auto_refresh": bool(self.auto_refresh),
                 "refresh_sec": self.refresh_every,
                 "exclude_words": self.settings.get("exclude_words",
@@ -1622,6 +1625,14 @@ class TrackerCore:
     def set_auto(self, on):
         self.auto_refresh = bool(on)
         self.save_settings()
+
+    def set_theme(self, theme):
+        """Light/dark choice from the topbar toggle; persisted like kind."""
+        if theme in ("light", "dark"):
+            self.theme = theme
+            self.save_settings()
+            return True
+        return False
 
     def set_advanced(self, exclude_words, min_price):
         self.settings["exclude_words"] = exclude_words or ""
@@ -2480,6 +2491,7 @@ class Api:
         cols = st.get("visible_columns", DEFAULT_COLUMNS)
         cols = [c for c in cols if c in ALL_COLUMNS] or list(DEFAULT_COLUMNS)
         return {"kind": self._core.kind,
+                "theme": self._core.settings.get("theme", ""),
                 "auto_refresh": bool(self._core.auto_refresh),
                 "refresh_sec": self._core.refresh_every,
                 "exclude_words": st.get("exclude_words", DEFAULT_EXCLUDE_WORDS),
@@ -2523,6 +2535,9 @@ class Api:
     def set_auto(self, on):
         self._core.set_auto(bool(on))
         return {"ok": True}
+
+    def set_theme(self, theme):
+        return {"ok": self._core.set_theme(theme or "")}
 
     def set_advanced(self, exclude_words, min_price):
         """Saves the advanced filters; the page picks up the new minimum."""

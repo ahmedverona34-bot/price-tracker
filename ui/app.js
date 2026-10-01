@@ -109,6 +109,39 @@
    * ------------------------------------------------------------------ */
   function $(id) { return document.getElementById(id); }
 
+  /* ------------------------------------------------------------------ *
+   * Theme (light / dark).
+   * ------------------------------------------------------------------ *
+   * The whole window repaints from tokens.css: every rule reads var(--…),
+   * so switching data-theme on <html> is the entire theme change. The
+   * choice is kept in two places: localStorage paints the first frame
+   * before the bridge exists (see the inline script in index.html), and
+   * settings.json carries it across machines via the backend. */
+  var THEME_KEY = "pt-theme";
+
+  function currentTheme() {
+    return document.documentElement.getAttribute("data-theme") === "dark"
+      ? "dark" : "light";
+  }
+
+  function applyTheme(t) {
+    t = (t === "dark") ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+    try { localStorage.setItem(THEME_KEY, t); } catch (e) { /* private mode */ }
+    var moon = $("themeIconMoon"), sun = $("themeIconSun"), btn = $("themeBtn");
+    if (moon) moon.classList.toggle("hidden", t !== "light");
+    if (sun) sun.classList.toggle("hidden", t !== "dark");
+    if (btn) btn.title = (t === "light")
+      ? "التبديل إلى الوضع الداكن" : "التبديل إلى الوضع الفاتح";
+  }
+
+  function readLocalTheme() {
+    try {
+      var t = localStorage.getItem(THEME_KEY);
+      return (t === "dark" || t === "light") ? t : "";
+    } catch (e) { return ""; }
+  }
+
   /* Rewrite an element only when the markup actually changed.
      Rebuilding identical HTML would drop text selection, hover states and any
      pointer event already in flight, so it is skipped. */
@@ -1487,6 +1520,9 @@
     });
     api("get_settings").then(function (s) {
       if (s) {
+        // Theme first: the backend wins when it holds an explicit choice,
+        // otherwise the local pre-paint value (or light) stays.
+        if (s.theme === "dark" || s.theme === "light") applyTheme(s.theme);
         state.kind = s.kind || state.kind;
         state.minPrice = s.min_price || "";
         // saved_query is the last keyword the user searched. Pre-filling it
@@ -1514,6 +1550,14 @@
   }
 
   function boot() {
+    var local = readLocalTheme();
+    if (local) applyTheme(local);
+    var themeBtn = $("themeBtn");
+    if (themeBtn) themeBtn.addEventListener("click", function () {
+      var next = (currentTheme() === "light") ? "dark" : "light";
+      applyTheme(next);
+      api("set_theme", next);
+    });
     renderColMenu();
     apply();
     setInterval(poll, 1000);

@@ -37,6 +37,16 @@ type scale, all verbatim. `ui/styles.css` holds the layout.
   in `px` so the port is exact regardless of the root font size.
 - Spacing: 4 / 8 / 12 / 16 / 24px, gutters 16 and 24px.
 
+## Themes
+
+`ui/tokens.css` holds the dark tokens on `:root` plus a `[data-theme="light"]`
+override taken from the Stitch light/slate screens (page `#f8fafc`, cards
+`#ffffff`, cobalt `#2563eb`, green `#16a34a`). Every rule in `ui/styles.css`
+reads `var(--…)` with no hardcoded colour, so the topbar toggle repaints the
+whole window by flipping one attribute; the choice persists in `settings.json`
+(`theme: light | dark`, default `light`) with a `localStorage` pre-paint so
+the first frame never flashes.
+
 ## Typography
 
 Thmanyah Sans, self-hosted, weights 300/400/500/700/900.

@@ -132,3 +132,87 @@
   --rail-w:      68px;
   --topbar-h:    56px;   /* h-14 */
 }
+
+/* ===========================================================================
+   Light theme — the Stitch "light / slate" system (_1/_2 code.html).
+   ---------------------------------------------------------------------------
+   Only color + elevation tokens are overridden here; radii, spacing and the
+   type scale stay shared so both themes keep the same geometry. Every rule
+   in styles.css reads var(--…), so flipping data-theme on <html> repaints
+   the whole window with no extra markup. Thmanyah Sans stays the only
+   typeface in both themes.
+   =========================================================================== */
+[data-theme="light"] {
+  --background:                  #f8fafc;
+  --surface:                     #ffffff;
+  --surface-dim:                 #f1f5f9;
+  --surface-bright:              #ffffff;
+  --surface-container-lowest:    #f8fafc;
+  --surface-container-low:       #ffffff;
+  --surface-container:           #ffffff;
+  --surface-container-high:      #f1f5f9;
+  --surface-container-highest:   #e2e8f0;
+  --surface-variant:             #f1f5f9;
+  --on-surface:                  #0f172a;
+  --on-surface-variant:          #475569;
+  --inverse-surface:             #0f172a;
+  --inverse-on-surface:          #f8fafc;
+  --outline:                     #64748b;
+  --outline-variant:             #e2e8f0;
+  --surface-tint:                #2563eb;
+  --primary:                     #2563eb;
+  --on-primary:                  #ffffff;
+  --primary-container:           #2563eb;
+  --on-primary-container:        #ffffff;
+  --inverse-primary:             #1d4ed8;
+  --secondary:                   #16a34a;
+  --on-secondary:                #ffffff;
+  --secondary-container:         #dcfce7;
+  --on-secondary-container:      #15803d;
+  --tertiary:                    #d97706;
+  --on-tertiary:                 #ffffff;
+  --tertiary-container:          #fef3c7;
+  --on-tertiary-container:       #92400e;
+  --error:                       #dc2626;
+  --on-error:                    #ffffff;
+  --error-container:             #fee2e2;
+  --on-error-container:          #991b1b;
+  --primary-fixed:               #dbe1ff;
+  --primary-fixed-dim:           #b4c5ff;
+  --on-primary-fixed:            #00174b;
+  --on-primary-fixed-variant:    #003ea8;
+  --secondary-fixed:             #15803d;
+  --secondary-fixed-dim:         #86efac;
+  --on-secondary-fixed:          #052e16;
+  --on-secondary-fixed-variant:  #15803d;
+  --tertiary-fixed:              #fef3c7;
+  --tertiary-fixed-dim:          #fcd34d;
+  --on-tertiary-fixed:           #451a03;
+  --on-tertiary-fixed-variant:   #92400e;
+  --on-background:               #0f172a;
+
+  /* Light elevation: soft slate shadows instead of dark glows. */
+  --shadow-cta:      0 4px 14px rgba(37, 99, 235, 0.25);
+  --shadow-cta-hov:  0 6px 20px rgba(37, 99, 235, 0.35);
+  --shadow-pop:      0 8px 24px rgba(15, 23, 42, 0.12);
+  --shadow-sm:       0 1px 2px 0 rgb(15 23 42 / 0.05);
+  --shadow-md:       0 4px 6px -1px rgb(15 23 42 / 0.07), 0 2px 4px -2px rgb(15 23 42 / 0.05);
+
+  /* Hairlines read as slate borders on white, not white glows on black. */
+  --outline-20:  rgba(15, 23, 42, 0.08);
+  --outline-30:  rgba(15, 23, 42, 0.12);
+  --outline-40:  rgba(15, 23, 42, 0.16);
+  --outline-50:  rgba(15, 23, 42, 0.22);
+  --outline-60:  rgba(15, 23, 42, 0.30);
+  --outline-15:  rgba(15, 23, 42, 0.06);
+  --white-04:    rgba(15, 23, 42, 0.03);
+  --white-06:    rgba(15, 23, 42, 0.05);
+  --white-08:    rgba(15, 23, 42, 0.07);
+  --primary-10:  rgba(37, 99, 235, 0.08);
+  --primary-15:  rgba(37, 99, 235, 0.12);
+  --secondary-15: rgba(22, 163, 74, 0.12);
+  --secondary-container-30: rgba(22, 163, 74, 0.14);
+  --lowest-90:   rgba(255, 255, 255, 0.92);
+  --lowest-95:   rgba(255, 255, 255, 0.96);
+  --high-40:     rgba(241, 245, 249, 0.80);
+}
