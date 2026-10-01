@@ -150,7 +150,7 @@ SLOW_AFTER_SEC = 45  # a site slower than this gets an amber status dot
 # never reads the installed version from the registry: the registry can hold a
 # newer one after an update, and a mismatch there would make the button offer
 # the same build forever.
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 # A manifest file served over HTTPS. Two lines:
 #
 #   1.1.0
@@ -2393,7 +2393,8 @@ class TrackerCore:
         if os.path.exists(exe) and not exe.startswith("\\\\"):
             helper = os.path.join(run_dir, "relaunch_after_update.cmd")
             try:
-                _write_relaunch_helper(helper, inst.pid, exe)
+                _write_relaunch_helper(helper, inst.pid,
+                                       os.path.basename(dest), exe)
                 # helper is quoted: an unquoted path with spaces breaks
                 # `start` and pops a visible error box. /d ignores AutoRun
                 # entries that could hijack the update. cwd must be local:
@@ -2592,7 +2593,7 @@ class Api:
         return self._core.open_excel_file()
 
 
-def _write_relaunch_helper(path, installer_pid, exe):
+def _write_relaunch_helper(path, installer_pid, setup_image, exe):
     """Write the batch script that reopens the app after an update.
 
     Kept as a file rather than an inline `cmd /c` string because the polling
@@ -2609,25 +2610,52 @@ def _write_relaunch_helper(path, installer_pid, exe):
     # enough to fail silently and leave the file behind. Instead the next
     # update removes it: see the unlink below. The path never changes, so at
     # most one stale helper exists and it is replaced before use.
+    exe_image = os.path.basename(exe)
     body = (
         "@echo off\r\n"
-        "rem Written by price_tracker.py. Removes itself once the app is back.\r\n"
+        "rem Written by price_tracker.py. Relaunches the app after an update.\r\n"
+        "rem Progress goes to relaunch.log next to this script.\r\n"
+        "set \"RLOG=%%~dp0relaunch.log\"\r\n"
+        "echo [%%date%% %%time%%] waiting for installer PID %d>> \"%%RLOG%%\"\r\n"
+        "set WAITED=0\r\n"
         ":wait\r\n"
         # No caret before the redirect: this file is run directly by cmd, and
         # `2^>nul` is passed to tasklist as a literal argument, which it
         # rejects. The loop then never waits and the app can open against the
         # half-replaced files.
         'tasklist /fi "PID eq %d" 2>nul | find "%d" >nul\r\n'
-        "if not errorlevel 1 (ping -n 1 127.0.0.1 >nul & goto wait)\r\n"
+        "if errorlevel 1 goto startapp\r\n"
+        # A PID alone is not proof: Windows recycles PIDs quickly, and a
+        # recycled PID would park this loop forever. The image name must also
+        # match the setup that was just run.
+        'tasklist /fi "PID eq %d" /fo csv /nh 2>nul | find /i "%s" >nul\r\n'
+        "if errorlevel 1 goto startapp\r\n"
+        # Even a correct wait must end: after ~10 minutes launch anyway.
+        "set /a WAITED+=1\r\n"
+        "if %%WAITED%% GEQ 600 goto startapp\r\n"
+        "ping -n 2 127.0.0.1 >nul\r\n"
+        "goto wait\r\n"
+        ":startapp\r\n"
+        "echo [%%date%% %%time%%] installer gone, launching app>> \"%%RLOG%%\"\r\n"
         "rem The installer has exited. A short pause lets it release the exe.\r\n"
         "ping -n 2 127.0.0.1 >nul\r\n"
         # Guard the relaunch: `start` on a missing/UNC exe pops a visible
         # "The network path was not found." MessageBox. Exiting quietly
         # leaves the update installed without scaring the user.
-        'if not exist "%s" exit /b 0\r\n'
+        'if not exist "%s" (echo [%%date%% %%time%%] exe missing, giving up>> "%%RLOG%%" & exit /b 0)\r\n'
+        "set TRIES=0\r\n"
+        ":try\r\n"
         'start "" "%s"\r\n'
-
-    ) % (installer_pid, installer_pid, exe, exe)
+        "ping -n 4 127.0.0.1 >nul\r\n"
+        # Confirm the app is actually up: a start against half-replaced files
+        # dies silently, so retry instead of hoping once.
+        'tasklist /fi "IMAGENAME eq %s" 2>nul | find /i "%s" >nul\r\n'
+        "if not errorlevel 1 (echo [%%date%% %%time%%] app running>> \"%%RLOG%%\" & exit /b 0)\r\n"
+        "set /a TRIES+=1\r\n"
+        "if %%TRIES%% GEQ 5 (echo [%%date%% %%time%%] FAILED to start app>> \"%%RLOG%%\" & exit /b 1)\r\n"
+        "goto try\r\n"
+    ) % (installer_pid, installer_pid, installer_pid, installer_pid,
+         setup_image, exe, exe, exe_image, exe_image)
     # Remove the previous helper first. It is dead by now: the app it was
     # waiting on has exited, and its polling process is gone with it. Best
     # effort, because a locked file is not worth failing an update over.

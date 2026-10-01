@@ -1160,7 +1160,6 @@
     renderChips(v);
     renderStatCards(v, st);
     renderSel();
-    renderFileInfo();
   }
 
 
