@@ -2408,11 +2408,20 @@ class TrackerCore:
                                        os.path.basename(dest), exe)
                 # wscript takes the script path as one plain argument and
                 # shows no console, so there is no `cmd /c start` quoting
-                # layer left to mangle it. The `//?/` prefix passes long or
-                # oddly-shaped paths through untouched.
+                # layer left to mangle it.
+                #
+                # The path is passed plain, with no `//?` prefix. wscript
+                # cannot open an extended-length path: it ignores the prefix,
+                # reports "The system cannot find the path specified." in its
+                # own modal "Windows Script Host" box, and never runs the
+                # script. That box is invisible to us, so the app would just
+                # never reopen. The prefix is also not needed here -- the
+                # helper lives in %LOCALAPPDATA%\PriceTrackerUpdate, which is
+                # far below the 260 character limit it exists for.
                 subprocess.Popen(
-                    ["wscript.exe", "//nologo", "//?%s" % helper],
+                    ["wscript.exe", "//nologo", helper],
                     close_fds=True,
+                    env=_relaunch_env(exe, os.path.basename(dest), helper),
                     cwd=run_dir,
                     creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
                     | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
@@ -2614,7 +2623,8 @@ def _write_relaunch_helper(path, installer_pid, setup_image, exe):
     `cmd /c start "" "<path>"`, and cmd's quoting rules cut that argument in
     half: the user saw "Windows cannot find '\\\\'" and the app never came
     back. VBScript takes the path as a plain string and never re-parses it,
-    and wscript runs it with no console at all.
+    and wscript runs it with no console at all. It must also be started with
+    a plain path: see the `//?` note at the call site.
 
     It polls for the installer's PID rather than sleeping a fixed time: the
     install writes roughly 26 MB and the machine's speed is not ours to
@@ -2624,11 +2634,19 @@ def _write_relaunch_helper(path, installer_pid, setup_image, exe):
     # runs. Instead the next update removes it -- see the unlink below. The
     # path never changes, so at most one stale helper exists and it is
     # replaced before use.
-    exe_image = os.path.basename(exe)
-    log_path = os.path.join(os.path.dirname(path), "relaunch.log")
+    # The paths are handed over in environment variables, not written into
+    # the script. The audience installs under an Arabic user name, and this
+    # file cannot carry that: wscript reads a .vbs as ANSI, so a path written
+    # as UTF-8 turns to mojibake inside the string literal and FileExists then
+    # never matches; written as the ANSI codepage instead, it raises
+    # UnicodeEncodeError outright on a Western machine. Environment variables
+    # have neither problem -- they are Unicode end to end -- so the script
+    # stays pure ASCII and still gets the real path. See the call site for the
+    # env this reads.
     body = (
         "' Written by price_tracker.py. Relaunches the app after an update.\r\n"
-        "' Every step is appended to relaunch.log next to this script.\r\n"
+        "' Pure ASCII on purpose: the paths arrive in environment variables\r\n"
+        "' because this file is read as ANSI and cannot hold an Arabic path.\r\n"
         "'\r\n"
         "' Process checks go through tasklist, not WMI: on the machines this\r\n"
         "' has to survive, connecting to winmgmts:\\\\.\\root\\cimv2 fails with\r\n"
@@ -2636,16 +2654,20 @@ def _write_relaunch_helper(path, installer_pid, setup_image, exe):
         "Option Explicit\r\n"
         "\r\n"
         "Dim fso, log, pid, waited, tries, sh, err, text\r\n"
+        "Dim exe, exeImage, logPath\r\n"
         "Set fso = CreateObject(\"Scripting.FileSystemObject\")\r\n"
         "Set sh = CreateObject(\"WScript.Shell\")\r\n"
+        "exe = sh.ExpandEnvironmentStrings(\"%%PRICE_TRACKER_EXE%%\")\r\n"
+        "logPath = sh.ExpandEnvironmentStrings(\"%%PRICE_TRACKER_RELAUNCH_LOG%%\")\r\n"
+        "exeImage = fso.GetFileName(exe)\r\n"
         "pid = %d\r\n"
-        "Set log = fso.CreateTextFile(\"%s\", True)\r\n"
+        "Set log = fso.CreateTextFile(logPath, True)\r\n"
         "log.WriteLine Now & \" waiting for installer pid \" & pid\r\n"
         "\r\n"
         "' A PID alone is not proof: Windows recycles PIDs, so the process\r\n"
         "' image name must match the setup that was just run as well.\r\n"
         "waited = 0\r\n"
-        "Do While IsRunning(\"PID eq \" & pid, \"%s\")\r\n"
+        "Do While IsRunning(\"PID eq \" & pid, \"%%PRICE_TRACKER_SETUP_IMAGE%%\")\r\n"
         "  waited = waited + 1\r\n"
         "  If waited > 300 Then Exit Do\r\n"
         "  WScript.Sleep 2000\r\n"
@@ -2656,7 +2678,7 @@ def _write_relaunch_helper(path, installer_pid, setup_image, exe):
         "WScript.Sleep 2000\r\n"
         "\r\n"
         "' Guard the relaunch: running a missing path pops an error box.\r\n"
-        "If Not fso.FileExists(\"%s\") Then\r\n"
+        "If Len(exe) = 0 Or Not fso.FileExists(exe) Then\r\n"
         "  log.WriteLine Now & \" exe missing, giving up\"\r\n"
         "  log.Close\r\n"
         "  WScript.Quit 0\r\n"
@@ -2665,10 +2687,10 @@ def _write_relaunch_helper(path, installer_pid, setup_image, exe):
         "' Retry: a launch against half-replaced files dies silently.\r\n"
         "tries = 0\r\n"
         "Do\r\n"
-        "  sh.CurrentDirectory = fso.GetParentFolderName(\"%s\")\r\n"
+        "  sh.CurrentDirectory = fso.GetParentFolderName(exe)\r\n"
         "  err = \"\"\r\n"
         "  On Error Resume Next\r\n"
-        "  sh.Run \"\"\"%s\"\"\", 1, False\r\n"
+        "  sh.Run \"\"\" & exe & \"\"\", 1, False\r\n"
         "  If Err.Number <> 0 Then err = Err.Description\r\n"
         "  Err.Clear\r\n"
         "  On Error GoTo 0\r\n"
@@ -2678,7 +2700,7 @@ def _write_relaunch_helper(path, installer_pid, setup_image, exe):
         "    log.WriteLine Now & \" launch attempt \" & tries + 1 & \" \" & err\r\n"
         "  End If\r\n"
         "  WScript.Sleep 4000\r\n"
-        "  If IsRunning(\"IMAGENAME eq %s\", \"%s\") Then\r\n"
+        "  If IsRunning(\"IMAGENAME eq \" & exeImage, exeImage) Then\r\n"
         "    log.WriteLine Now & \" app is running\"\r\n"
         "    log.Close\r\n"
         "    WScript.Quit 0\r\n"
@@ -2714,11 +2736,7 @@ def _write_relaunch_helper(path, installer_pid, setup_image, exe):
         "  End If\r\n"
         "  IsRunning = found\r\n"
         "End Function\r\n"
-    ) % (installer_pid, log_path.replace('"', '""'),
-         setup_image.replace('"', '""'),
-         exe.replace('"', '""'),
-         exe.replace('"', '""'), exe.replace('"', '""'),
-         exe_image.replace('"', '""'), exe_image.replace('"', '""'))
+    ) % installer_pid
     # Remove the previous helper first. It is dead by now: the app it was
     # waiting on has exited, and its host process is gone with it. Best
     # effort, because a locked file is not worth failing an update over.
@@ -2726,17 +2744,35 @@ def _write_relaunch_helper(path, installer_pid, setup_image, exe):
         os.remove(path)
     except OSError:
         pass
-    # wscript reads the file as ANSI, so a non-ASCII install path (an Arabic
-    # username) has to be written in the locale encoding; ascii raises
-    # UnicodeEncodeError and breaks the update.
+    # Every path now travels in an environment variable, so this file is pure
+    # ASCII and can be written as ASCII. That is what keeps an Arabic install
+    # path working: wscript reads the script as ANSI, so anything non-ASCII
+    # written here would be mangled or rejected. Write it strictly, and fail
+    # loudly in app.log if a future edit reintroduces a non-ASCII character,
+    # rather than shipping a helper that dies silently on launch.
     try:
-        import locale
-        enc = locale.getpreferredencoding(False) or "utf-8"
-    except Exception:
-        enc = "utf-8"
-    with io.open(path, "w", encoding=enc, newline="") as f:
-        f.write(body)
-    logging.info("relaunch helper written to %s", path)
+        with io.open(path, "w", encoding="ascii", newline="") as f:
+            f.write(body)
+    except UnicodeEncodeError:
+        logging.exception("relaunch helper is not ASCII; an Arabic install "
+                          "path would break the relaunch")
+        raise
+    logging.info("relaunch helper written to %s (exe=%s)", path, exe)
+
+
+def _relaunch_env(exe, setup_image, helper_path):
+    """Environment for the helper's wscript process.
+
+    The paths go here rather than into the script because environment
+    variables are Unicode, and the script file cannot be: see
+    _write_relaunch_helper.
+    """
+    env = dict(os.environ)
+    env["PRICE_TRACKER_EXE"] = exe
+    env["PRICE_TRACKER_SETUP_IMAGE"] = setup_image
+    env["PRICE_TRACKER_RELAUNCH_LOG"] = os.path.join(
+        os.path.dirname(helper_path), "relaunch.log")
+    return env
 
 
 def _resource(*parts):
