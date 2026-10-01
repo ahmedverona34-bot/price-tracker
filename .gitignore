@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 .venv/
+.venv312/
 venv/
 
 # ---- Build output (regenerate with build_exe.bat / build_setup.bat) ----
