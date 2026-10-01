@@ -109,16 +109,28 @@ SLOW_AFTER_SEC = 45  # a site slower than this gets an amber status dot
 # newer one after an update, and a mismatch there would make the button offer
 # the same build forever.
 APP_VERSION = "1.0.0"
-# A manifest file served over plain HTTP, e.g. from GitHub Pages. Two lines:
+# A manifest file served over HTTPS. Two lines:
 #
 #   1.1.0
-#   https://example.com/PriceTracker-Setup-1.1.0.exe
+#   https://github.com/ahmedverona34-bot/price-tracker/releases/download/v1.1.0/PriceTracker-Setup-1.1.0.exe
 #
-# Per release the author edits those two lines and re-uploads the setup. The
-# download URL has to be listed rather than guessed: the build number is not
-# known until the file exists, and a wrong guess would silently re-download
-# the build the user already has.
-UPDATE_URL = "https://YOUR-ACCOUNT.github.io/price-tracker/latest.txt"
+# It is published from the gh-pages branch of this repo, so a release is:
+#   build_setup.bat                       -> dist-installer\PriceTracker-Setup-<ver>.exe
+#   gh release create v<ver> <setup>      -> the download URL in line 2
+#   edit gh-pages/latest.txt with both lines, then push that branch
+#   raise APP_VERSION here and AppVersion in installer/installer.iss
+#
+# The download URL has to be listed rather than guessed: the build number is
+# not known until the file exists, and a wrong guess would silently
+# re-download the build the user already has. _update_manifest rejects any
+# URL that is not https or does not end in .exe, so a mistyped manifest
+# means "no update offered" rather than a download that gets run.
+UPDATE_URL = "https://ahmedverona34-bot.github.io/price-tracker/latest.txt"
+
+# What a manifest's first line must look like: digits and dots only, at least
+# one digit. Compared against exactly (no $ anchor beyond the match) so a
+# trailing note or stray character is rejected rather than silently trimmed.
+_VERSION_RE = re.compile(r"^\d+(?:\.\d+)*$")
 
 KIND_DEVICES = "أجهزة فقط"
 KIND_ACCESSORIES = "إكسسوارات فقط"
@@ -2171,6 +2183,13 @@ class TrackerCore:
         """(latest_version, download_url) from the manifest, or (None, None).
 
         Never raises: the caller turns None into a plain Arabic sentence.
+
+        Both fields are checked here, before either reaches subprocess.Popen
+        in install_update(). The manifest is only a file on a web server, so a
+        typo, a half-finished upload or a hijacked host would otherwise end
+        with an arbitrary URL being downloaded and run with the user's rights.
+        Refusing a malformed manifest makes the worst case "no update
+        offered" rather than "ran something".
         """
         if not UPDATE_URL or "YOUR-ACCOUNT" in UPDATE_URL:
             return None, None
@@ -2182,11 +2201,30 @@ class TrackerCore:
             logging.exception("update manifest fetch failed")
             return None, None
         if not lines:
+            logging.warning("update manifest is empty")
             return None, None
         version = lines[0]
+        if not _VERSION_RE.match(version):
+            # version_tuple() is the right tool for *comparing* two versions,
+            # but it cannot validate one: with no digits it falls back to (0,),
+            # which is still a usable tuple. So check the shape directly.
+            logging.warning("update manifest has no usable version: %r",
+                            version[:40])
+            return None, None
         url = lines[1] if len(lines) > 1 else ""
-        if not url.startswith("http"):
-            logging.warning("update manifest has no usable download url")
+        if not url.startswith("https://"):
+            # https only, so a manifest cannot move the download to plain http
+            # where the setup could be swapped in transit.
+            logging.warning("update manifest url is not https: %r", url[:80])
+            return None, None
+        # install_update downloads this and runs it as an executable, so
+        # anything that is not a setup is a mistake rather than an update. The
+        # query is dropped first: a signed or token-bearing release URL is
+        # still a .exe behind the "?", and install_update already splits on it
+        # to name the file.
+        path = url.split("?")[0].split("#")[0]
+        if not path.lower().endswith(".exe"):
+            logging.warning("update manifest url is not a .exe: %r", url[:80])
             return None, None
         return version, url
 

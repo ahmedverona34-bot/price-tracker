@@ -43,6 +43,12 @@ stitch_arabic_electronics_price_tracker/
 # Pre-redesign interface, superseded by ui/.
 ui_backup_before_stitch/
 
+# Working copy of the gh-pages branch that serves the update manifest.
+# The manifest is tracked on that branch, not on master; this folder exists
+# only so the two files can be edited and pushed. Its own .git is what makes
+# it a separate branch, so it must never be picked up as a submodule here.
+gh-pages/
+
 # ---- OS noise ----
 Thumbs.db
 Desktop.ini
