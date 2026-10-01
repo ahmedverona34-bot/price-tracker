@@ -474,15 +474,38 @@
 
     function show(msg) { toast(msg); }
 
-    // Checked after the first paint so a slow or dead server can never hold
-    // up the window the user is trying to work in.
+    /* Checked after the first paint so a slow or dead server can never hold
+       up the window the user is trying to work in. Then re-checked on a slow
+       timer, because a new build can be published while the window is open:
+       requiring a restart to learn about one defeats the point of an in-app
+       updater. The backend serves this from a short-lived cache, so the
+       repeating check costs no request most of the time.
+
+       Visibility is respected: a window in the background does not need to
+       poll, and a laptop waking from sleep checks straight away. */
+    var UPDATE_EVERY_MS = 15 * 60 * 1000;
+
     function check() {
-      api("check_update").then(function (r) {
+      // max_age matches the re-check interval: if the last manifest was read
+      // less than that long ago it is still considered current, so a repeat
+      // check is answered without touching the network.
+      api("check_update", UPDATE_EVERY_MS / 1000).then(function (r) {
         if (!r || !r.has_update) return;   // current, or offline: stay silent
-        railBtn.classList.remove("hidden");
+        if (railBtn.classList.contains("hidden")) {
+          railBtn.classList.remove("hidden");
+          show("في نسخة جديدة: " + r.latest);
+        }
         railBtn.title = "في نسخة جديدة: " + r.latest;
       });
     }
+
+    setInterval(function () {
+      if (!document.hidden) check();
+    }, UPDATE_EVERY_MS);
+
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) check();
+    });
 
     railBtn.addEventListener("click", function () {
       if (!window.confirm("سيتم إغلاق البرنامج الآن حتى يتم تحديث نفسه. هل تريد المتابعة؟"))

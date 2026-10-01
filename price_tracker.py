@@ -108,7 +108,7 @@ SLOW_AFTER_SEC = 45  # a site slower than this gets an amber status dot
 # never reads the installed version from the registry: the registry can hold a
 # newer one after an update, and a mismatch there would make the button offer
 # the same build forever.
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 # A manifest file served over HTTPS. Two lines:
 #
 #   1.1.0
@@ -1502,6 +1502,13 @@ class TrackerCore:
         # still on disk for the price-delta baseline above and for the
         # Sources page, which is explicitly about history.
         self.site_stats = {}
+        # Manifest cache. The page re-checks for updates while the window
+        # stays open, and a repeating network fetch on every check is a
+        # cost the user can feel. The manifest only changes when a new
+        # build is published, which happens between launches, so a short
+        # freshness window makes the repeating check free.
+        self._manifest_cache = None
+        self._manifest_time = 0.0
         self.last_query = ""   # armed by the first search, see below
         self.kind = self.settings.get("kind", KIND_DEVICES)
         self.auto_refresh = self.settings.get("auto_refresh", True)
@@ -2196,7 +2203,7 @@ class TrackerCore:
             return {"ok": False, "message": "تعذّر حفظ الملف"}
 
     # ----- in-app update -----
-    def _update_manifest(self):
+    def _update_manifest(self, max_age=None):
         """(latest_version, download_url) from the manifest, or (None, None).
 
         Never raises: the caller turns None into a plain Arabic sentence.
@@ -2210,6 +2217,12 @@ class TrackerCore:
         """
         if not UPDATE_URL or "YOUR-ACCOUNT" in UPDATE_URL:
             return None, None
+        # Served from memory when it is still fresh, so a repeating check
+        # costs no request. Only a manifest that parsed and validated is
+        # ever remembered: a rejected one must be re-fetched, not cached.
+        if (max_age is not None and self._manifest_cache is not None
+                and self._manifest_time + max_age > time.time()):
+            return self._manifest_cache
         try:
             r = get_session("update").get(UPDATE_URL, timeout=10)
             r.raise_for_status()
@@ -2243,9 +2256,11 @@ class TrackerCore:
         if not path.lower().endswith(".exe"):
             logging.warning("update manifest url is not a .exe: %r", url[:80])
             return None, None
+        self._manifest_cache = (version, url)
+        self._manifest_time = time.time()
         return version, url
 
-    def check_update(self):
+    def check_update(self, max_age=None):
         """Ask the manifest whether a newer build exists.
 
         Returns a dict the page renders directly. Nothing technical reaches
@@ -2257,7 +2272,7 @@ class TrackerCore:
         if not UPDATE_URL or "YOUR-ACCOUNT" in UPDATE_URL:
             out["message"] = "خدمة التحديث غير مُفعَّلة بعد"
             return out
-        latest, _url = self._update_manifest()
+        latest, _url = self._update_manifest(max_age=max_age)
         if not latest:
             out["message"] = "تعذّر التحقق من وجود تحديث، يُرجى المحاولة لاحقًا"
             return out
@@ -2376,8 +2391,10 @@ class Api:
     def set_refresh_sec(self, sec):
         return {"ok": self._core.set_refresh_sec(sec)}
 
-    def check_update(self):
-        return self._core.check_update()
+    def check_update(self, max_age=None):
+        # max_age comes from the page so a repeating check is answered
+        # from the manifest cache instead of the network.
+        return self._core.check_update(max_age=max_age)
 
     def install_update(self):
         """The page closes the window after this returns ok, so the installer
@@ -2658,3 +2675,4 @@ if __name__ == "__main__":
     launch_gui()
 
 
+
