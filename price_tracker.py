@@ -99,6 +99,11 @@ TIMEOUT = 20
 AUTOSAVE_FILE = "prices.xlsx"
 AUTO_REFRESH_SEC = 10 * 60  # 10 minutes
 SEARCH_TIMEOUT_SEC = 8 * 60  # watchdog: free a stuck search
+# How long the app waits for the update installer to exit before closing
+# its own window. The setup writes ~26 MB, so it needs real slack; the wait
+# is a ceiling, not a delay, because the close happens the moment the
+# installer is actually done.
+UPDATE_EXIT_WAIT_SEC = 45
 SITES_FILE = "sites.json"
 SETTINGS_FILE = "settings.json"
 PREVRUN_FILE = "prevrun.json"
@@ -109,7 +114,7 @@ SLOW_AFTER_SEC = 45  # a site slower than this gets an amber status dot
 # never reads the installed version from the registry: the registry can hold a
 # newer one after an update, and a mismatch there would make the button offer
 # the same build forever.
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 # A manifest file served over HTTPS. Two lines:
 #
 #   1.1.0

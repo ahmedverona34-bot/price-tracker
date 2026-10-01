@@ -19,7 +19,7 @@
 
 #define AppName "متتبع الأسعار"
 #define AppNameEn "Price Tracker"
-#define AppVersion "1.0.5"
+#define AppVersion "1.0.6"
 #define AppExeName "PriceTracker.exe"
 #define AppPublisher "Price Tracker"
 
