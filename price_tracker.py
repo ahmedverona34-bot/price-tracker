@@ -108,7 +108,7 @@ SLOW_AFTER_SEC = 45  # a site slower than this gets an amber status dot
 # never reads the installed version from the registry: the registry can hold a
 # newer one after an update, and a mismatch there would make the button offer
 # the same build forever.
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 # A manifest file served over HTTPS. Two lines:
 #
 #   1.1.0
@@ -1495,8 +1495,14 @@ class TrackerCore:
         self.results = []        # filtered rows (shown + saved)
         _prev = load_prevrun()
         self.prev = _prev.get("prices", {})  # "site||link" -> after price
-        self.site_stats = _prev.get("sites", {})
-        self.last_query = self.settings.get("keyword", "")
+        # Per-site status from the previous run is deliberately NOT loaded
+        # here. On launch the window must describe what has actually happened
+        # in this session, and nothing has run yet: showing "45 صف • 0.7ث"
+        # before the user has searched reads as this session's result. It is
+        # still on disk for the price-delta baseline above and for the
+        # Sources page, which is explicitly about history.
+        self.site_stats = {}
+        self.last_query = ""   # armed by the first search, see below
         self.kind = self.settings.get("kind", KIND_DEVICES)
         self.auto_refresh = self.settings.get("auto_refresh", True)
         self.searching = False
@@ -1520,16 +1526,22 @@ class TrackerCore:
         if self.refresh_every < 60:
             self.refresh_every = AUTO_REFRESH_SEC
         self.next_refresh_at = 0.0
-        if self.last_query:
-            # Remembered keyword: first automatic refresh one interval out.
-            self.next_refresh_at = time.time() + self.refresh_every
+        # The field is pre-filled with the last keyword so the user can simply
+        # press the button again, but that is a saved preference, not a search:
+        # it must not arm the scheduler or label the (still empty) table.
+        self.saved_query = self.settings.get("keyword", "")
+        # No refresh is armed at launch. last_query stays empty until the user
+        # searches, so the countdown reads as nothing rather than promising an
+        # automatic refresh that has not been started.
         self._lock = threading.Lock()
         self._window = None  # set by the GUI layer for evaluate_js pushes
         threading.Thread(target=self._scheduler_loop, daemon=True).start()
 
     # ----- settings -----
     def current_settings(self):
-        return {"keyword": self.last_query,
+        # saved_query, not last_query: the field is pre-filled with the last
+        # keyword on launch, but last_query is empty until a search runs.
+        return {"keyword": self.saved_query,
                 "kind": self.kind,
                 "auto_refresh": bool(self.auto_refresh),
                 "refresh_sec": self.refresh_every,
@@ -1637,8 +1649,12 @@ class TrackerCore:
             self._set_status("لا توجد مواقع، يُرجى مراجعة ملف sites.json")
             return False
         self.last_query = q
+        self.saved_query = q
         self.save_settings()
         self.searching = True
+        # The countdown only starts once a real search has run, so it always
+        # describes work the user has actually asked for.
+        self.next_refresh_at = time.time() + self.refresh_every
         self.search_gen += 1
         gen = self.search_gen
         self._set_status('يجري البحث عن "%s"...' % q)
@@ -2052,6 +2068,7 @@ class TrackerCore:
                 "searching": self.searching,
                 "countdown_sec": self.countdown_sec(),
                 "auto_refresh": bool(self.auto_refresh),
+                "saved_query": self.saved_query,
                 "kind": self.kind,
                 "last_query": self.last_query,
                 "shown": len(self.view or self.results),

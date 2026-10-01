@@ -923,8 +923,12 @@
       var dot = st.status || (s.enabled ? "idle" : "off");
       var on = state.siteOn[s.name] !== false;
       var count = v.bySite[s.name] || 0;
-      var meta = st.status === "ok" || st.status === "slow"
-        ? st.rows + " صف • " + st.duration_sec + "ث" : "";
+      // A site that has not run in this session shows its name and nothing
+      // else. Row counts and timings belong to a search the user watched
+      // happen; carrying the previous run's numbers onto an empty window
+      // reads as this session's result.
+      var ran = st.status === "ok" || st.status === "slow";
+      var meta = ran ? st.rows + " صف • " + st.duration_sec + "ث" : "";
       return '<button class="chip' + (on ? "" : " off") + '"'
         + ' data-site="' + esc(s.name) + '"'
         + ' aria-pressed="' + on + '"'
@@ -1340,7 +1344,13 @@
     if (!st) return;
     if (document.activeElement !== $("autoChk"))
       $("autoChk").checked = !!st.auto_refresh;
-    $("countdown").textContent = fmtCountdown(st.countdown_sec);
+    // Only tick once this session has actually searched. Before that the
+    // backend sends no query and no armed refresh, and an empty string here
+    // leaves the label blank instead of counting down a refresh that nobody
+    // started.
+    var cd = $("countdown");
+    var text = st.last_query ? fmtCountdown(st.countdown_sec) : "";
+    if (cd.textContent !== text) cd.textContent = text;
     $("searchBtn").disabled = !!st.searching;
   }
 
@@ -1439,6 +1449,12 @@
       if (s) {
         state.kind = s.kind || state.kind;
         state.minPrice = s.min_price || "";
+        // saved_query is the last keyword the user searched. Pre-filling it
+        // saves a retype, but it is only a hint in the field: the header and
+        // the countdown stay neutral until a search actually runs this
+        // session, so the window never claims work nobody asked for yet.
+        if (s.keyword && document.activeElement !== $("q"))
+          $("q").value = s.keyword;
         if (s.visible_columns && s.visible_columns.length)
           // Normalised for display only; the saved order in settings.json is
           // left untouched, so nothing the user configured is overwritten.
