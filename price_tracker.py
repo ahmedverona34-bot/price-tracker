@@ -23,6 +23,7 @@ import re
 import statistics
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import webbrowser
@@ -70,6 +71,41 @@ def data_dir():
         return app_dir()
 
 
+def _local_run_dir():
+    """Local folder for update executables (installer + relaunch helper).
+
+    data_dir() may be a UNC path (``\\\\server\\...``) when %APPDATA% is
+    folder-redirected on a domain. Windows cannot run an .exe from UNC
+    reliably and cmd.exe cannot use UNC as its working directory -- both
+    surface as a visible "The network path was not found." MessageBox, which
+    is exactly what the in-app updater hit. So executables always go to a
+    local dir: %LOCALAPPDATA% first, then TEMP/TMP, never a UNC path.
+    """
+    candidates = []
+    for key in ("LOCALAPPDATA", "TEMP", "TMP"):
+        val = os.environ.get(key)
+        if val and not val.startswith("\\\\"):
+            candidates.append(os.path.join(val, "PriceTrackerUpdate"))
+    try:
+        tmp = tempfile.gettempdir()
+        if tmp and not tmp.startswith("\\\\"):
+            candidates.append(os.path.join(tmp, "PriceTrackerUpdate"))
+    except Exception:
+        pass
+    for path in candidates:
+        try:
+            os.makedirs(path, exist_ok=True)
+            return path
+        except OSError:
+            continue
+    # Last resort: data_dir() even if it is UNC (caller still works,
+    # it just risks the old MessageBox on redirected profiles).
+    try:
+        return data_dir()
+    except Exception:
+        return os.path.abspath(".")
+
+
 logging.basicConfig(filename=os.path.join(data_dir(), "app.log"),
                     level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(message)s",
@@ -114,7 +150,7 @@ SLOW_AFTER_SEC = 45  # a site slower than this gets an amber status dot
 # never reads the installed version from the registry: the registry can hold a
 # newer one after an update, and a mismatch there would make the button offer
 # the same build forever.
-APP_VERSION = "1.0.8"
+APP_VERSION = "1.0.9"
 # A manifest file served over HTTPS. Two lines:
 #
 #   1.1.0
@@ -2307,7 +2343,12 @@ class TrackerCore:
         if version_tuple(latest) <= version_tuple(APP_VERSION):
             return {"ok": False, "message": "البرنامج محدّث"}
         name = os.path.basename(url.split("?")[0]) or "PriceTracker-Setup.exe"
-        dest = os.path.join(data_dir(), name)
+        # Never download/run the setup from a UNC path (roaming %APPDATA%
+        # on a domain): cmd/start show "The network path was not found."
+        run_dir = _local_run_dir()
+        dest = os.path.join(run_dir, name)
+        logging.info("update download dir: %s (data_dir=%s app_dir=%s)",
+                     run_dir, data_dir(), app_dir())
         try:
             with get_session("update").get(url, timeout=60, stream=True) as r:
                 r.raise_for_status()
@@ -2328,7 +2369,7 @@ class TrackerCore:
                 "/CURRENTUSER", "/DIR=%s" % app_dir()]
         logging.info("launching update installer: %s", dest)
         try:
-            inst = subprocess.Popen(args, close_fds=True)
+            inst = subprocess.Popen(args, close_fds=True, cwd=run_dir)
         except OSError:
             logging.exception("update installer failed to start")
             return {"ok": False, "message": "مقدرنا نشغل التحديث"}
@@ -2349,13 +2390,20 @@ class TrackerCore:
         # the app on a timer instead would race a 26 MB install and could open
         # the old files again.
         exe = os.path.join(app_dir(), "PriceTracker.exe")
-        if os.path.exists(exe):
-            helper = os.path.join(data_dir(), "relaunch_after_update.cmd")
+        if os.path.exists(exe) and not exe.startswith("\\\\"):
+            helper = os.path.join(run_dir, "relaunch_after_update.cmd")
             try:
                 _write_relaunch_helper(helper, inst.pid, exe)
+                # helper is quoted: an unquoted path with spaces breaks
+                # `start` and pops a visible error box. /d ignores AutoRun
+                # entries that could hijack the update. cwd must be local:
+                # cmd cannot use a UNC working directory ("The network path
+                # was not found.").
                 subprocess.Popen(
-                    ["cmd.exe", "/c", "start", '""', "/min", helper],
+                    ["cmd.exe", "/d", "/c", "start", '""', "/min",
+                     '"%s"' % helper],
                     close_fds=True,
+                    cwd=run_dir,
                     creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
                     | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -2365,6 +2413,9 @@ class TrackerCore:
                              exe, inst.pid)
             except OSError:
                 logging.exception("could not schedule the relaunch")
+        elif os.path.exists(exe):
+            logging.warning("app runs from a network path (%s), "
+                            "skipping auto-relaunch", exe)
         else:
             # Running from source, or a build that names its exe differently:
             # there is nothing to reopen, which is the right outcome.
@@ -2570,9 +2621,13 @@ def _write_relaunch_helper(path, installer_pid, exe):
         "if not errorlevel 1 (ping -n 1 127.0.0.1 >nul & goto wait)\r\n"
         "rem The installer has exited. A short pause lets it release the exe.\r\n"
         "ping -n 2 127.0.0.1 >nul\r\n"
+        # Guard the relaunch: `start` on a missing/UNC exe pops a visible
+        # "The network path was not found." MessageBox. Exiting quietly
+        # leaves the update installed without scaring the user.
+        'if not exist "%s" exit /b 0\r\n'
         'start "" "%s"\r\n'
 
-    ) % (installer_pid, installer_pid, exe)
+    ) % (installer_pid, installer_pid, exe, exe)
     # Remove the previous helper first. It is dead by now: the app it was
     # waiting on has exited, and its polling process is gone with it. Best
     # effort, because a locked file is not worth failing an update over.
@@ -2580,7 +2635,15 @@ def _write_relaunch_helper(path, installer_pid, exe):
         os.remove(path)
     except OSError:
         pass
-    with io.open(path, "w", encoding="ascii", newline="") as f:
+    # Batch files run under the system ANSI code page, so non-ASCII install
+    # paths (Arabic usernames) must be written in the locale encoding,
+    # not ascii -- ascii raises UnicodeEncodeError and breaks the update.
+    try:
+        import locale
+        enc = locale.getpreferredencoding(False) or "utf-8"
+    except Exception:
+        enc = "utf-8"
+    with io.open(path, "w", encoding=enc, newline="") as f:
         f.write(body)
     logging.info("relaunch helper written to %s", path)
 
