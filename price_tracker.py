@@ -114,7 +114,7 @@ SLOW_AFTER_SEC = 45  # a site slower than this gets an amber status dot
 # never reads the installed version from the registry: the registry can hold a
 # newer one after an update, and a mismatch there would make the button offer
 # the same build forever.
-APP_VERSION = "1.0.6"
+APP_VERSION = "1.0.7"
 # A manifest file served over HTTPS. Two lines:
 #
 #   1.1.0
@@ -2552,17 +2552,34 @@ def _write_relaunch_helper(path, installer_pid, exe):
     install writes roughly 26 MB and the machine's speed is not ours to assume,
     so starting the app on a timer risks opening the old files.
     """
+    # The script does not delete itself. cmd holds a script open while it runs,
+    # so `del` from inside it fails, and doing it through a second nested cmd
+    # means quoting a path through start's extra parse layer, which is fragile
+    # enough to fail silently and leave the file behind. Instead the next
+    # update removes it: see the unlink below. The path never changes, so at
+    # most one stale helper exists and it is replaced before use.
     body = (
         "@echo off\r\n"
         "rem Written by price_tracker.py. Removes itself once the app is back.\r\n"
         ":wait\r\n"
-        'tasklist /fi "PID eq %d" 2^>nul | find "%d" >nul\r\n'
+        # No caret before the redirect: this file is run directly by cmd, and
+        # `2^>nul` is passed to tasklist as a literal argument, which it
+        # rejects. The loop then never waits and the app can open against the
+        # half-replaced files.
+        'tasklist /fi "PID eq %d" 2>nul | find "%d" >nul\r\n'
         "if not errorlevel 1 (ping -n 1 127.0.0.1 >nul & goto wait)\r\n"
         "rem The installer has exited. A short pause lets it release the exe.\r\n"
         "ping -n 2 127.0.0.1 >nul\r\n"
         'start "" "%s"\r\n'
-        "del \"%s\" >nul 2>&1\r\n"
-    ) % (installer_pid, installer_pid, exe, path)
+
+    ) % (installer_pid, installer_pid, exe)
+    # Remove the previous helper first. It is dead by now: the app it was
+    # waiting on has exited, and its polling process is gone with it. Best
+    # effort, because a locked file is not worth failing an update over.
+    try:
+        os.remove(path)
+    except OSError:
+        pass
     with io.open(path, "w", encoding="ascii", newline="") as f:
         f.write(body)
     logging.info("relaunch helper written to %s", path)
