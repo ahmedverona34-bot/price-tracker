@@ -344,20 +344,12 @@
         loadSettings();
         renderUpdateCard(updateInfo);   // the update card lives here
       }
-      if (btn.dataset.page === "files") renderFileInfo();
       if (btn.dataset.page === "status") {
         renderStatusPage(state.status || {});
         refreshLogs();
       }
     });
   });
-
-  function renderFileInfo() {
-    var st = state.status;
-    $("fileInfo").textContent = st && st.has_file
-      ? "آخر حفظ: " + (st.updated_at || "")
-      : "لا يوجد ملف محفوظ بعد.";
-  }
 
   function exclWords() {
     return ($("excludeBox").value || "").split(",")
@@ -821,11 +813,7 @@
   $("expCsvBtn").addEventListener("click", function () {
     api("export_csv", "links", viewLinks()).then(toastSaved);
   });
-  $("exportBtn").addEventListener("click", function () {
-    exportView("view");
-  });
   $("openBtn").addEventListener("click", openFile);
-  $("openBtn2").addEventListener("click", openFile);
   function openFile() {
     api("open_excel").then(function (res) {
       if (res && !res.ok && res.message) toast(res.message);
