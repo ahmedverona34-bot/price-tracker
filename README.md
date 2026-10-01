@@ -142,7 +142,9 @@ Keep `APP_VERSION` in step with `AppVersion` in `installer/installer.iss`.
 
 ## License
 
-Application code: see the repository's license file.
+**No license has been chosen yet.** The repository is public but carries no
+stated terms, so "all rights reserved" applies by default and nobody may legally
+reuse the code. Add a `LICENSE` file before sharing it beyond this account.
 
 **Thmanyah Sans** (bundled in `ui/fonts/`) is by Boutros Fonts and is licensed
 separately — its terms travel with it in `ui/fonts/LICENSE.pdf`.

@@ -36,7 +36,7 @@ Runs on any Windows 10/11 machine by double-clicking `PriceTracker-Setup-<ver>.e
 - Plain HTTP first: every store page is fetched with a browser-shaped request and parsed from the server-rendered HTML. Dubai Phone (Next.js on Vercel, 16 cards per page) is walked page by page with `?page=N`, so no browser is needed for it and Vercel BotID never sees a headless client.
 - Playwright remains only as an opt-in per site (`"use_playwright": true`) for storefronts that truly render in the browser; when used it prefers installed Edge (msedge), then Chrome, then downloads headless Chromium once with Arabic progress. WebView2 required for the window (ships with Windows 10/11; friendly screen + download link if missing).
 - A store answering with a bot checkpoint (Cloudflare or Vercel's 708) is detected from the response itself, cools that site down, and reports plain Arabic — never a technical error, never a silent zero-result.
-- Thmanyah Sans is the only typeface, self-hosted from official OTF files in `fonts/` (pending: files not yet received).
+- Thmanyah Sans is the only typeface, self-hosted from the official OTF files in `ui/fonts/` (weights 300/400/500/700/900, plus the font's `LICENSE.pdf`). They ship inside the bundle, so the app needs no font download at runtime.
 - Packaged onedir build must stay under 60 MB excluding any later-downloaded browser. **Met: 25.4 MB** — Playwright is not bundled (it carries a private copy of node, ~89 MB, and no configured site needs it); the setup is 12.3 MB.
 
 ## Brand Commitments
