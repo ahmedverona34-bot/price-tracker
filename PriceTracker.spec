@@ -40,6 +40,9 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
+    # Window + taskbar icon. assets/PriceTracker.ico carries 7 sizes; below 48px
+    # the mark drops to a 2x2 grid so it still resolves at taskbar height.
+    icon='assets/PriceTracker.ico',
     name='PriceTracker',
     debug=False,
     bootloader_ignore_signals=False,

@@ -19,9 +19,12 @@
 
 #define AppName "متتبع الأسعار"
 #define AppNameEn "Price Tracker"
-#define AppVersion "1.0.7"
+#define AppVersion "1.0.8"
 #define AppExeName "PriceTracker.exe"
 #define AppPublisher "Price Tracker"
+; Wizard and Add/Remove Programs icon. Inno reads the .ico directly, so the
+; seven sizes inside it are what Explorer renders at each size.
+#define AppIcon "..\assets\PriceTracker.ico"
 
 [Setup]
 AppId={{8C4E1A2B-6D3F-4A17-9B5E-2F7A9C1D3E45}
@@ -42,7 +45,8 @@ WizardSizePercent=110
 ; The app never needs admin, so never ask. Keeps a silent update possible later.
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-UninstallDisplayIcon={app}\{#AppExeName}
+SetupIconFile={#AppIcon}
+UninstallDisplayIcon={#AppIcon}
 UninstallDisplayName={#AppName}
 ; Tell Windows this is a per-user install, not a system one.
 ArchitecturesAllowed=x64compatible
