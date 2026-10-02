@@ -33,13 +33,13 @@ try {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 4-6"/></svg>
       </div>
       <nav class="rail-nav">
-        <button class="rail-btn active" data-page="search" title="جدول الأسعار المباشر" aria-label="جدول الأسعار المباشر">
+        <button class="rail-btn hover-pop active" data-page="search" title="جدول الأسعار المباشر" aria-label="جدول الأسعار المباشر">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg>
         </button>
-        <button class="rail-btn" data-page="sites" title="مصادر البيانات" aria-label="مصادر البيانات">
+        <button class="rail-btn hover-pop" data-page="sites" title="مصادر البيانات" aria-label="مصادر البيانات">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg>
         </button>
-        <button class="rail-btn" data-page="settings" title="الإعدادات" aria-label="الإعدادات">
+        <button class="rail-btn hover-pop" data-page="settings" title="الإعدادات" aria-label="الإعدادات">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.06-.4.1-.8.1-1.2z"/></svg>
         </button>
       </nav>
@@ -88,7 +88,7 @@ try {
       <div class="page-inner">
 
         <!-- ---- Extraction & filter surface ---- -->
-        <section class="extract" aria-label="البحث والفلاتر">
+        <section class="extract rise rise-1" aria-label="البحث والفلاتر">
           <div class="extract-row">
             <div class="search-bar">
               <span class="search-icon">
@@ -109,9 +109,9 @@ try {
             <!-- Order follows the reference: الكل, then the device default,
                  then accessories. renderKind() moves .active to the saved one. -->
             <div class="segmented" id="kindSeg" role="group" aria-label="النوع">
-              <button data-kind="الكل">الكل</button>
-              <button data-kind="أجهزة فقط" class="active">أجهزة فقط</button>
-              <button data-kind="إكسسوارات فقط">إكسسوارات فقط</button>
+              <button data-kind="الكل" class="pill-lift">الكل</button>
+              <button data-kind="أجهزة فقط" class="pill-lift active">أجهزة فقط</button>
+              <button data-kind="إكسسوارات فقط" class="pill-lift">إكسسوارات فقط</button>
             </div>
 
             <button id="searchBtn" class="btn-primary">
@@ -147,7 +147,7 @@ try {
         </section>
 
         <!-- ---- Summary metric ribbon ---- -->
-        <section class="ribbon" id="statCards" aria-label="ملخص النتائج">
+        <section class="ribbon rise rise-2" id="statCards" aria-label="ملخص النتائج">
           <div class="ribbon-metrics">
             <div class="metric"><span class="k">إجمالي النتائج:</span><span class="v" id="statTotal">…</span></div>
             <span class="metric-sep"></span>
@@ -175,7 +175,7 @@ try {
         </section>
 
         <!-- ---- Table toolbar ---- -->
-        <section class="toolbar">
+        <section class="toolbar rise rise-3">
           <div class="toolbar-left">
             <h2 id="sectionTitle">نتائج البحث</h2>
             <span id="liveBadge" class="pill pill-live hidden">
@@ -210,21 +210,21 @@ try {
 
         <!-- ---- The sticky data table ---- -->
           <!-- mb-3 on the sections above is the reference's own rhythm -->
-        <div class="table-card">
+        <div class="table-card rise rise-4">
           <div class="table-wrap">
             <table id="grid" aria-label="نتائج الأسعار">
               <thead><tr id="headRow"></tr></thead>
               <tbody id="tbody"></tbody>
             </table>
             <div id="empty" class="empty">
-              <span class="empty-mark">
+              <span class="empty-mark float-subtle">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
               </span>
               <h3>اكتب كلمة البحث في الحقل أعلاه ثم اضغط على زر البحث</h3>
               <p>مثال: آيفون، سامسونج، لابتوب</p>
             </div>
             <div id="noMatch" class="empty hidden">
-              <span class="empty-mark">
+              <span class="empty-mark float-subtle">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v5"/><path d="M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></svg>
               </span>
               <h3>لا توجد نتائج ضمن هذا الفلتر</h3>
@@ -264,7 +264,7 @@ try {
             <button id="sitesRefreshBtn" class="btn-outline sm">تحديث الحالة</button>
           </div>
 
-          <div class="table-card">
+          <div class="table-card rise rise-3">
             <div class="table-wrap slim">
               <table id="sitesTable" aria-label="مصادر البيانات">
                 <thead><tr id="sitesHead"></tr></thead>
@@ -354,7 +354,7 @@ try {
             <div class="card-body">
               <div class="field">
                 <span class="field-label">فترة إعادة التحديث التلقائي</span>
-                <div class="segmented wrap" id="refreshSeg" role="group" aria-label="فترة التحديث">
+                <div class="segmented wrap pill-lift-group" id="refreshSeg" role="group" aria-label="فترة التحديث">
                   <button data-sec="60">كل دقيقة</button>
                   <button data-sec="300">كل 5 دقائق</button>
                   <button data-sec="600" class="active">كل 10 دقائق</button>

@@ -429,6 +429,7 @@
   function apply(opts) {
     try {
       render();
+      rvScan();
     } catch (e) {
       reportJsError("render failed: " + e);
       toast("توجد مشكلة في عرض الجدول، يُرجى مراجعة ملف app.log");
@@ -438,6 +439,37 @@
   function setState(patch, opts) {
     Object.keys(patch).forEach(function (k) { state[k] = patch[k]; });
     apply(opts);
+  }
+
+  /* Scroll-continuous reveals. Items render fully visible; one shared
+     IntersectionObserver adds .rv-play while an item is in the viewport
+     and removes it when it leaves, so the fade-up entrance replays on
+     every scroll pass instead of firing once. Pure class toggle, so a
+     re-render never flashes hidden content. */
+  var rvIO = null;
+  function rvSetup() {
+    if (rvIO || !("IntersectionObserver" in window)) return;
+    rvIO = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        en.target.classList.toggle("rv-play", !!en.isIntersecting);
+      });
+    }, { threshold: 0 });
+  }
+  function rvScan() {
+    rvSetup();
+    var items = document.querySelectorAll(".rv");
+    if (!rvIO) {
+      Array.prototype.forEach.call(items, function (el) {
+        el.classList.add("rv-play");
+      });
+      return;
+    }
+    // Disconnect first: observed rows from a previous render are detached
+    // nodes by now and must not be held.
+    rvIO.disconnect();
+    Array.prototype.forEach.call(items, function (el) {
+      rvIO.observe(el);
+    });
   }
 
   /* ------------------------------------------------------------------ *
@@ -691,23 +723,24 @@
       Math.round(100 - avg * 4)));
     setHTML($("siteStats"), [
       statCard({ label: "إجمالي المتاجر الممسوحة", value: String(sites.length),
-        foot: "100% مفعّلة", icon: "stack", tone: "blue", pct: 100 }),
+        foot: "100% مفعّلة", icon: "stack", tone: "blue", pct: 100, rd: 0 }),
       statCard({ label: "المصادر النشطة في العمل", value: String(on.length),
         foot: on.length ? Math.round(100 * on.length / sites.length) + "% مفعّلة"
                         : "لا يوجد مفعّل",
-        icon: "check", tone: "green", green: true,
+        icon: "check", tone: "green", green: true, rd: 1,
         pct: sites.length ? Math.round(100 * on.length / sites.length) : 0 }),
       statCard({ label: "متوسط سرعة الاستخراج",
         value: avg == null ? "—" : avg + " ثانية",
         foot: avg == null ? "بانتظار أول بحث" : "لكل موقع",
         icon: "speed", tone: speed == null ? "" : speed >= 80 ? "green"
               : speed >= 50 ? "amber" : "",
-        pct: speed, footTone: speed == null ? "" : speed >= 50 ? "" : "amber" }),
+        pct: speed, footTone: speed == null ? "" : speed >= 50 ? "" : "amber",
+        rd: 2 }),
       statCard({ label: "نسبة نجاح البحث والمطابقة",
         value: rate == null ? "—" : rate + "%",
         foot: ok + " موقع شغال الآن", icon: "check",
         tone: rate == null ? "" : rate >= 80 ? "green" : rate >= 50 ? "amber" : "",
-        pct: rate == null ? 0 : rate })
+        pct: rate == null ? 0 : rate, rd: 3 })
     ].join(""));
   }
 
@@ -745,14 +778,14 @@
       }) : sites;
       setHTML($("sitesBody"), shown.map(function (s, i) {
         var dot = s.status || (s.enabled ? "idle" : "off");
-        var delay = Math.min(i + 1, 15);
-        return '<tr class="table-row-animated tr-delay-' + delay + '">'
+        var delay = Math.min(i, 14) * 35;
+        return '<tr class="rv" style="--rd:' + delay + 'ms">'
           + '<td class="c-pick"><span class="site-badge" aria-hidden="true">'
           + esc(s.name.slice(0, 2)) + "</span></td>"
           + '<td class="c-site"><b>' + esc(s.name) + "</b></td>"
           + '<td class="c-time"><span class="pattern">'
           + patternHtml(s.pattern) + "</span></td>"
-          + '<td><span class="pill pill-site"><span class="dot-wrap"><span class="dot ' + esc(dot)
+          + '<td><span class="pill pill-site pill-lift"><span class="dot-wrap"><span class="dot ' + esc(dot)
           + '"></span><span class="ping-ring" aria-hidden="true"></span></span>' + esc(SITE_STATUS[s.status] || "—") + "</span></td>"
           + '<td class="num center">' + (s.rows || 0) + "</td>"
           + '<td class="num">' + (s.duration_sec || 0) + " ث</td>"
@@ -1091,7 +1124,7 @@
       // reads as this session's result.
       var ran = st.status === "ok" || st.status === "slow";
       var meta = ran ? st.rows + " صف • " + st.duration_sec + "ث" : "";
-      return '<button class="chip' + (on ? "" : " off") + '"'
+      return '<button class="chip pill-lift' + (on ? "" : " off") + '"'
         + ' data-site="' + esc(s.name) + '"'
         + ' aria-pressed="' + on + '"'
         + (s.enabled ? "" : ' disabled title="مقفول من صفحة المصادر"') + ">"
@@ -1150,7 +1183,7 @@
           + ' onerror="this.remove()">'
         : '<span class="thumb-empty"></span>';
     }
-    if (key === "site") return '<span class="pill pill-site">'
+    if (key === "site") return '<span class="pill pill-site pill-lift">'
       + '<span class="dot ok"></span>' + esc(r.site) + "</span>";
     if (key === "title") return esc(r.title);
     if (key === "before") {
@@ -1175,7 +1208,7 @@
         : '<span class="c-disc none">—</span>';
     }
     if (key === "link") {
-      return '<button class="icon-btn" data-open="' + esc(r.link)
+      return '<button class="icon-btn hover-pop" data-open="' + esc(r.link)
         + '" aria-label="فتح الرابط">'
         + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"'
         + ' stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
@@ -1297,12 +1330,12 @@
         return '<td class="' + cls.trim() + '"' + extra + ">"
           + cellHtml(r, key) + "</td>";
       }).join("");
-      // Staggered entrance: each row fades in 40ms after the previous one,
-      // capped at 15 steps so long result sets stay snappy.
-      var delay = Math.min(i + 1, 15);
+      // Scroll-continuous reveal: per-row stagger via --rd, capped so long
+      // result sets stay snappy. The observer adds .rv-play in the viewport.
+      var delay = Math.min(i, 14) * 35;
       return '<tr data-link="' + esc(r.link) + '"'
-        + ' class="table-row-animated tr-delay-' + delay
-        + (state.selected[r.link] ? " selected" : "") + '"'
+        + ' class="rv' + (state.selected[r.link] ? " selected" : "") + '"'
+        + ' style="--rd:' + delay + 'ms"'
         + ">" + tds + "</tr>";
     }).join(""));
 
@@ -1374,7 +1407,9 @@
     var bar = opt.pct == null ? ""
       : '<span class="stat-bar"><i class="' + (opt.tone || "") + '" style="width:'
         + opt.pct + '%"></i></span>';
-    return '<div class="stat-card' + (opt.flat ? " flat" : "") + '">'
+    var rd = Math.min(opt.rd || 0, 3) * 60;
+    return '<div class="stat-card rv' + (opt.flat ? " flat" : "") + '"'
+      + ' style="--rd:' + rd + 'ms">'
       + '<div class="stat-top"><span class="stat-label">' + esc(opt.label)
       + '</span><span class="stat-icon ' + (opt.tone || "") + '">'
       + ICON[opt.icon] + "</span></div>"
