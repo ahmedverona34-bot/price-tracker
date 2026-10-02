@@ -1582,6 +1582,22 @@ input[type="text"] { font-family: inherit; }
 .toast button:hover { opacity: 0.9; }
 
 /* ===========================================================================
+   Theme reveal — View Transitions API circular wipe
+   =========================================================================== */
+/* The JS drives a clip-path circle on ::view-transition-new(root) expanding
+   from the toggle click point. These rules kill the default cross-fade so
+   only the circle is visible, and keep the snapshots opaque (no blend that
+   would wash the themes together mid-flight). Without JS there is no
+   transition at all, so there is nothing to fall back from. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-old(root) { z-index: 1; }
+::view-transition-new(root) { z-index: 2147483646; }
+
+/* ===========================================================================
    Responsive
    =========================================================================== */
 @media (max-width: 1180px) {
