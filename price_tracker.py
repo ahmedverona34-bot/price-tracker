@@ -145,6 +145,15 @@ SETTINGS_FILE = "settings.json"
 PREVRUN_FILE = "prevrun.json"
 SLOW_AFTER_SEC = 45  # a site slower than this gets an amber status dot
 
+# Sidebar width bounds, in px. The live values are the --rail-collapsed /
+# --rail-open-min / --rail-max tokens in ui/tokens.css, which the page reads
+# and clamps against; these are only the validation guard on what comes back
+# from the bridge, so a hand-edited settings.json cannot pin the rail to a
+# width the user has no way to drag back out of.
+RAIL_COLLAPSED_W = 68
+RAIL_MIN_W = 68
+RAIL_MAX_W = 380
+
 # ---- in-app update ----
 # Keep APP_VERSION in step with AppVersion in installer/installer.iss. The app
 # never reads the installed version from the registry: the registry can hold a
@@ -1595,6 +1604,7 @@ class TrackerCore:
         return {"keyword": self.saved_query,
                 "kind": self.kind,
                 "theme": self.theme,
+                "rail_w": self.settings.get("rail_w", RAIL_COLLAPSED_W),
                 "auto_refresh": bool(self.auto_refresh),
                 "refresh_sec": self.refresh_every,
                 "exclude_words": self.settings.get("exclude_words",
@@ -1633,6 +1643,23 @@ class TrackerCore:
             self.save_settings()
             return True
         return False
+
+    def set_rail(self, width):
+        """Sidebar width from the drag handle; persisted like kind.
+
+        The page owns the live width and already clamps to the same bounds, so
+        this only has to refuse a value that did not come from the drag — the
+        bridge is reachable from anything running in the window.
+        """
+        try:
+            w = int(width)
+        except (TypeError, ValueError):
+            return False
+        if w < RAIL_MIN_W or w > RAIL_MAX_W:
+            return False
+        self.settings["rail_w"] = w
+        self.save_settings()
+        return True
 
     def set_advanced(self, exclude_words, min_price):
         self.settings["exclude_words"] = exclude_words or ""
@@ -2499,6 +2526,7 @@ class Api:
         cols = [c for c in cols if c in ALL_COLUMNS] or list(DEFAULT_COLUMNS)
         return {"kind": self._core.kind,
                 "theme": self._core.settings.get("theme", ""),
+                "rail_w": self._core.settings.get("rail_w", RAIL_COLLAPSED_W),
                 "auto_refresh": bool(self._core.auto_refresh),
                 "refresh_sec": self._core.refresh_every,
                 "exclude_words": st.get("exclude_words", DEFAULT_EXCLUDE_WORDS),
@@ -2545,6 +2573,9 @@ class Api:
 
     def set_theme(self, theme):
         return {"ok": self._core.set_theme(theme or "")}
+
+    def set_rail(self, width):
+        return {"ok": self._core.set_rail(width)}
 
     def set_advanced(self, exclude_words, min_price):
         """Saves the advanced filters; the page picks up the new minimum."""

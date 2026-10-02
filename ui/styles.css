@@ -99,16 +99,89 @@ button { font-family: inherit; }
   background: var(--surface-container-low);
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;   /* was center; each child centers itself when collapsed */
   justify-content: space-between;
   padding: var(--space-lg) 0;
+  /* --rail-w is rewritten by the drag in app.js, so the rail eases to the new
+     width instead of snapping. `html.rail-dragging` cancels it for the duration
+     of the gesture, where a 150ms lag behind the pointer reads as broken. */
+  transition: width 150ms ease;
+}
+html.rail-dragging #rail,
+html.rail-dragging #center,
+html.rail-dragging #topbar,
+html.rail-dragging .set-bar { transition: none; }
+
+/* While a resize is in flight the pointer is over the table, so the text caret
+   and the per-row hover cursors must not appear under a col-resize. */
+html.rail-dragging body { cursor: col-resize; user-select: none; }
+html.rail-dragging body * { cursor: col-resize !important; }
+
+/* Drag handle on the rail's inner (physical left) edge. It is the only part of
+   the rail that is not a click target, so grabbing it never navigates, and it
+   is offset half outside the edge so the seam is easy to catch. */
+.rail-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  width: 8px;
+  z-index: 2;
+  cursor: col-resize;
+  background: transparent;
+  touch-action: none;      /* sideways pointer moves resize, they do not scroll */
+}
+.rail-grip::after {        /* the hairline, which becomes the accent on hover */
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0; left: 3px;
+  width: 2px;
+  background: var(--outline-20);
+  transition: background-color 150ms ease;
+}
+.rail-grip:hover::after,
+.rail-grip:focus-visible::after { background: var(--primary); }
+.rail-grip:focus-visible { outline: none; }
+
+/* The rail's vertical stack. `align-items: stretch` plus a full-width brand
+   and nav is what pins every icon to the start edge (the right, in this RTL
+   shell) at all times: nothing inside re-centres as the width changes, so a
+   drag moves the rail's edge and nothing else. */
+.rail-top { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-xl); width: 100%; }
+
+/* Brand: logo first at the start edge, wordmark in the space left over. */
+.rail-brand { display: flex; align-items: center; gap: var(--space-md); width: 100%; min-width: 0; padding-inline-start: var(--space-md); }
+.rail-brand-txt { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.rail-brand-txt strong {
+  font-size: var(--fs-body-sm-size);
+  line-height: var(--fs-body-sm-lh);
+  font-weight: var(--fs-body-md-w);
+  color: var(--on-surface);
+  white-space: nowrap;
+}
+.rail-brand-txt small {
+  font-size: var(--fs-label-sm-size);
+  line-height: var(--fs-label-sm-lh);
+  color: var(--on-surface-variant);
+  white-space: nowrap;
 }
 
-.rail-top { display: flex; flex-direction: column; align-items: center; gap: var(--space-xl); width: 100%; }
+/* The reference's small "التنقل" caption above the items. */
+.rail-section {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  padding-inline-start: var(--space-md);
+  font-size: var(--fs-label-sm-size);
+  line-height: var(--fs-label-sm-lh);
+  color: var(--on-surface-variant);
+  white-space: nowrap;
+}
 
 .rail-logo {
   width: 44px;   /* w-11 */
   height: 44px;
+  flex: 0 0 auto;
   border-radius: var(--r-xl);
   background: var(--primary-container);
   color: var(--on-primary-container);
@@ -120,22 +193,33 @@ button { font-family: inherit; }
 }
 .rail-logo svg { width: 22px; height: 22px; }
 
-.rail-nav { display: flex; flex-direction: column; align-items: center; gap: var(--space-md); width: 100%; padding: 0 var(--space-sm); }
+/* No inline padding on the nav: the labels are meant to be cut off by the
+   rail's own edge as it is dragged, so anything inset here would slice the
+   text in the middle of the rail instead of on its boundary. */
+.rail-nav { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-md); width: 100%; }
 
+/* Always full width, icon always at the start edge. At the collapsed width
+   this is visually identical to the old centred 44px box (the 12px inline
+   start padding lands the icon where centring did), and it means the icons
+   never move as the rail is dragged. */
 .rail-btn {
-  width: 44px;
+  width: 100%;
   height: 44px;
+  min-width: 0;
   border: 0;
   border-radius: var(--r-xl);
   background: transparent;
   color: var(--on-surface-variant);
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  gap: var(--space-md);
+  padding-inline-start: var(--space-md);
+  padding-inline-end: 0;
   cursor: pointer;
   transition: background-color 150ms, color 150ms;
 }
-.rail-btn svg { width: 20px; height: 20px; }
+.rail-btn svg { width: 20px; height: 20px; flex: 0 0 auto; }
 .rail-btn:hover { background: var(--surface-container-high); color: var(--on-surface); }
 .rail-btn.active {
   background: var(--primary-container);
@@ -143,12 +227,47 @@ button { font-family: inherit; }
   box-shadow: var(--shadow-cta);
 }
 
-.rail-bottom { display: flex; flex-direction: column; align-items: center; gap: var(--space-lg); width: 100%; }
+/* The label takes whatever width is left after the icon and is clipped, with
+   no ellipsis: that is what makes the text appear a piece at a time as the
+   rail is dragged, and the cut lands exactly on the rail's own edge. */
+.rail-btn-txt {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-body-sm-size);
+  line-height: var(--fs-body-sm-lh);
+  font-weight: var(--fs-body-md-w);
+  color: inherit;          /* so the active pill recolours its own label */
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* At the collapsed width the rail is a deliberate icon strip, and 25px of
+   clipped label would still paint the first letters of the tab name into it.
+   So the text is off entirely there and the reveal starts the moment the rail
+   is dragged open. */
+[data-rail="closed"] .rail-btn-txt,
+[data-rail="closed"] .rail-brand-txt,
+[data-rail="closed"] .rail-section,
+[data-rail="closed"] .rail-status-txt { display: none; }
+
+/* While the rail is narrower than the longest label, the text is still being
+   cut off, so its trailing edge fades out. The mask comes off the moment the
+   label fits (app.js drops data-rail-tight), leaving full-strength text. */
+[data-rail-tight="1"] .rail-btn-txt,
+[data-rail-tight="1"] .rail-brand-txt,
+[data-rail-tight="1"] .rail-section,
+[data-rail-tight="1"] .rail-status-txt {
+  -webkit-mask-image: linear-gradient(to left, #000 82%, transparent 100%);
+          mask-image: linear-gradient(to left, #000 82%, transparent 100%);
+}
+
+.rail-bottom { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-lg); width: 100%; }
 
 /* Update affordance in the rail. Hidden until the backend confirms a newer
    build exists, so the rail never carries a dead control. Sized like the
    page buttons but flat: it is a notice, not a navigation step. */
-.rail-update { position: relative; width: 40px; height: 40px; }
+.rail-update { position: relative; width: 100%; height: 40px; min-width: 0; }
 .rail-update svg { width: 20px; height: 20px; }
 .rail-update-dot {
   position: absolute;
@@ -166,6 +285,19 @@ button { font-family: inherit; }
 @media (prefers-reduced-motion: reduce) {
   .rail-update-dot { animation: none; }
 }
+
+/* Engine pip + version, then the reference's "المحرك متصل" caption in the
+   space that is left. */
+.rail-status { display: flex; align-items: center; gap: var(--space-sm); width: 100%; min-width: 0; padding-inline-start: var(--space-md); }
+.rail-status-txt {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-label-sm-size);
+  line-height: var(--fs-label-sm-lh);
+  color: var(--on-surface-variant);
+  white-space: nowrap;
+  overflow: hidden;
+}
 .rail-ver {
   font-size: var(--fs-label-sm-size);
   line-height: var(--fs-label-sm-lh);
@@ -174,18 +306,45 @@ button { font-family: inherit; }
   color: var(--on-surface-variant);
 }
 .rail-pip {
+  flex: 0 0 auto;
   width: 8px; height: 8px; border-radius: var(--r-full);
   background: var(--secondary);
   box-shadow: 0 0 0 4px var(--surface-container-low);
 }
 
+/* Collapse control. Deliberately not a .rail-btn: the page-switch handler
+   binds .rail-btn[data-page], and a nav-styled class here would let this
+   button clear the active state off the real tabs. Points right (toward the
+   edge the rail slides into) when open, left into the content when closed. */
+.rail-collapse {
+  width: 40px; height: 40px;
+  flex: 0 0 auto;
+  align-self: flex-start;      /* stays on the rail's inner edge, never centred */
+  margin-inline-start: var(--space-sm);
+  border: 0;
+  border-radius: var(--r-xl);
+  background: transparent;
+  color: var(--on-surface-variant);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 150ms, color 150ms;
+}
+.rail-collapse:hover { background: var(--surface-container-high); color: var(--on-surface); }
+.rail-collapse svg { width: 20px; height: 20px; transition: transform 150ms ease; }
+[data-rail="open"] .rail-collapse svg { transform: scaleX(-1); }
+
+
 /* pr-[68px] in the reference: the rail is docked to the physical right, so the
-   content is inset from the right. */
+   content is inset from the right. The width tracks --rail-w, so a drag
+   re-insets the whole shell from this one value. */
 #center {
   padding-right: var(--rail-w);
   min-height: 100vh;
   height: 100vh;
   overflow-y: auto;
+  transition: padding-right 150ms ease;
 }
 
 #topbar {
@@ -201,6 +360,7 @@ button { font-family: inherit; }
   align-items: center;
   justify-content: space-between;
   padding: 0 var(--gutter-desktop);   /* px-6 */
+  transition: right 150ms ease;
 }
 
 #topbar .brand { display: flex; align-items: center; gap: var(--space-md); min-width: 0; }
@@ -1485,6 +1645,7 @@ input[type="text"] { font-family: inherit; }
   background: var(--lowest-90);
   backdrop-filter: blur(12px);
   border-top: 1px solid var(--outline-20);
+  transition: right 150ms ease;
 }
 .set-bar-inner {
   display: flex;
@@ -1607,10 +1768,19 @@ input[type="text"] { font-family: inherit; }
 }
 
 @media (max-width: 860px) {
-  #rail { width: 60px; }
-  #center { padding-right: 60px; }
-  .rail-btn, .rail-logo { width: 40px; height: 40px; }
-  #topbar { right: 60px; padding-inline: var(--space-md); }
+  /* The rail stays draggable here. It used to be pinned to a hard 60px here,
+     which silently overrode --rail-w and made the drag do nothing at all on a
+     narrow window. Instead the ceiling drops so a wide rail cannot squeeze
+     the table out of existence, and --rail-w still drives every consumer:
+     app.js reads --rail-max back through getComputedStyle, so the drag clamps
+     to this value without any JavaScript knowing about the breakpoint. */
+  :root { --rail-max: min(280px, 34vw); }
+  /* Only the glyphs shrink. The button itself must stay full width or the
+     label would lose the space it is revealed into. */
+  .rail-btn svg { width: 18px; height: 18px; }
+  .rail-logo { width: 40px; height: 40px; }
+  .rail-logo svg { width: 20px; height: 20px; }
+  #topbar { padding-inline: var(--space-md); }
   #topbar .brand-sub, #topbar .brand-sep { display: none; }
   .extract-row { flex-wrap: wrap; }
   .search-bar { flex: 1 1 100%; }

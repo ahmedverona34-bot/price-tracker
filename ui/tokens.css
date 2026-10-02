@@ -129,7 +129,19 @@
   --high-40:     rgba(40, 42, 46, 0.40);
 
   /* -- layout constants (from the reference markup) ---------------------- */
+  /* --rail-w is the one live value: ui/app.js overwrites it on <html> when the
+     rail is dragged, and #rail, #center, #topbar and .set-bar all read it, so
+     one write re-insets the whole shell. The bounds live next to it so the drag
+     clamp and the CSS fallbacks cannot drift apart. */
   --rail-w:      68px;
+  --rail-collapsed: 68px;    /* icons only, the original w-[68px] rail */
+  /* The width at which the longest label ("جدول الأسعار المباشر") stops being
+     cut off. It is not a gate: the labels are revealed by whatever width is
+     left after the icons, so this only marks the point where the trailing
+     fade comes off. Expressed against --rail-max so a narrow window, which
+     lowers the ceiling, can never leave the two inconsistent. */
+  --rail-open-min:  min(260px, var(--rail-max));
+  --rail-max:       380px;   /* past this the label is short and the shell starves */
   --topbar-h:    56px;   /* h-14 */
 }
 

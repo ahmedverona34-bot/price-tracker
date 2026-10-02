@@ -14,39 +14,89 @@ try {
   if (t === "dark" || t === "light")
     document.documentElement.setAttribute("data-theme", t);
 } catch (e) {}
+
+/* Pre-paint rail width, for the same reason. The range is repeated from
+   tokens.css (--rail-collapsed / --rail-max) because the stylesheet has not
+   loaded yet; app.js re-clamps against the real tokens as soon as it can see
+   them. A value outside the range is ignored rather than clamped here, so a
+   hand-edited localStorage cannot pin the rail somewhere the drag cannot
+   reach. Anything wider than collapsed counts as open: the labels are
+   revealed by the width itself, so there is no second threshold to keep in
+   sync here. */
+try {
+  var rw = parseInt(localStorage.getItem("pt-rail-w"), 10);
+  if (rw >= 68 && rw <= 380) {
+    document.documentElement.style.setProperty("--rail-w", rw + "px");
+    document.documentElement.setAttribute("data-rail", rw > 68 ? "open" : "closed");
+  } else {
+    document.documentElement.setAttribute("data-rail", "closed");
+  }
+} catch (e) {
+  document.documentElement.setAttribute("data-rail", "closed");
+}
 </script>
 </head>
 <body>
 <div id="app">
 
   <!-- ===================================================================
-       Aside rail — w-[68px] fixed right, mirrors the reference shell
+       Aside rail — fixed to the physical right, mirrors the reference shell.
+       Draggable: ui/app.js writes --rail-w on <html>, which every other
+       shell rule already reads. Collapsed it is the 68px icon-only strip;
+       wider, each item shows its Arabic label. The pre-paint script above
+       restores the saved width so the rail never snaps on launch.
        =================================================================== -->
   <aside id="rail" aria-label="التنقل">
     <div class="rail-top">
-      <div class="rail-logo" title="متتبع الأسعار">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 4-6"/></svg>
+      <div class="rail-brand">
+        <div class="rail-logo" title="متتبع الأسعار">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 4-6"/></svg>
+        </div>
+        <span class="rail-brand-txt">
+          <strong>متتبع الأسعار</strong>
+          <small>Price Tracker</small>
+        </span>
       </div>
+      <span class="rail-section">التنقل</span>
       <nav class="rail-nav">
         <button class="rail-btn active" data-page="search" title="جدول الأسعار المباشر" aria-label="جدول الأسعار المباشر">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg>
+          <span class="rail-btn-txt">جدول الأسعار المباشر</span>
         </button>
         <button class="rail-btn" data-page="sites" title="مصادر البيانات" aria-label="مصادر البيانات">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg>
+          <span class="rail-btn-txt">مصادر البيانات</span>
         </button>
         <button class="rail-btn" data-page="settings" title="الإعدادات" aria-label="الإعدادات">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.06-.4.1-.8.1-1.2z"/></svg>
+          <span class="rail-btn-txt">الإعدادات</span>
         </button>
       </nav>
     </div>
     <div class="rail-bottom">
       <button id="updateRailBtn" class="rail-btn rail-update hidden" title="في نسخة جديدة، اضغط للتحديث" aria-label="تحديث البرنامج">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+        <span class="rail-btn-txt">تحديث البرنامج</span>
         <span class="rail-update-dot" aria-hidden="true"></span>
       </button>
-      <span class="rail-pip" title="المحرك متصل"></span>
-      <span class="rail-ver" id="railVer">…</span>
+      <div class="rail-status">
+        <span class="rail-pip" title="المحرك متصل"></span>
+        <span class="rail-ver" id="railVer">…</span>
+        <span class="rail-status-txt">المحرك متصل</span>
+      </div>
+      <!-- Deliberately not a .rail-btn: the page-switch handler binds
+           .rail-btn[data-page], and a nav-styled class here would let this
+           control steal the active state from the real tabs. -->
+      <button id="railToggle" class="rail-collapse" title="طي القايمة الجانبية" aria-label="طي القايمة الجانبية">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
     </div>
+    <!-- Drag handle on the rail's inner (physical left) edge. It is a
+         separator, not a button, so it carries no click action; it is still
+         focusable so arrows resize it and Home/End jump to the bounds. -->
+    <div id="railGrip" class="rail-grip" role="separator" aria-orientation="vertical"
+         aria-label="اسحب لتغيير عرض القايمة الجانبية" tabindex="0"
+         aria-valuemin="68" aria-valuemax="380" aria-valuenow="68"></div>
   </aside>
 
   <div id="center">

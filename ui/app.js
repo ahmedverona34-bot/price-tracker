@@ -409,9 +409,227 @@
   }
 
   /* ------------------------------------------------------------------ *
+   * Sidebar width — draggable, and it stays where you leave it.
+   * ------------------------------------------------------------------ *
+   * --rail-w is the one live value the shell reads: #rail, #center, #topbar
+   * and .set-bar all size off it, so a drag is a single write on <html>
+   * rather than four rules that could disagree. The width is kept in the
+   * same two places as the theme, for the same reason: the inline
+   * pre-paint script in index.html restores it before the first frame, so
+   * the rail never snaps on launch, and settings.json carries it durably. */
+  var RAIL_KEY = "pt-rail-w";
+  /* The last width the rail was left *open* at, kept separately from
+     RAIL_KEY. Collapsing saves the collapsed width there, so without this the
+     toggle would have nothing to return to on the next launch and would fall
+     back to --rail-open-min — losing a width the user had deliberately
+     dragged to. */
+  var RAIL_OPEN_KEY = "pt-rail-open";
+  var RAIL_STEP = 16;        // arrow-key nudge, px
+  var railWidth = 0;         // last applied width; what a drag measures from
+  var railOpenBefore = 0;    // expanded width to return to on un-collapse
+  var railProbe = null;      // off-screen element used to resolve a token
+
+  /* Reads a length token as a number of pixels.
+   *
+   * The bounds are read from the tokens rather than hardcoded, so the drag
+   * clamp and the stylesheet cannot drift apart. They are resolved by
+   * measuring a probe rather than with parseFloat on getPropertyValue,
+   * because a custom property is not computed: --rail-max is
+   * `min(280px, 34vw)` on a narrow window and `--rail-open-min` is
+   * `min(260px, var(--rail-max))`, and parseFloat reads both as NaN. Writing
+   * the token into a real `width` lets the engine resolve it, so the tokens
+   * stay free to be any CSS length. The fallback only applies if the
+   * stylesheet failed to load entirely. */
+  function railPx(name, fallback) {
+    try {
+      if (!railProbe) {
+        railProbe = document.createElement("div");
+        railProbe.style.cssText = "position:absolute;top:0;left:0;height:0;" +
+          "visibility:hidden;pointer-events:none;width:0";
+        document.body.appendChild(railProbe);
+      }
+      railProbe.style.width = "var(" + name + ", " + fallback + "px)";
+      var n = parseFloat(getComputedStyle(railProbe).width);
+      return isFinite(n) ? n : fallback;
+    } catch (e) {
+      return fallback;
+    }
+  }
+
+  function railBounds() {
+    return {min: railPx("--rail-collapsed", 68),
+            open: railPx("--rail-open-min", 260),
+            max: railPx("--rail-max", 380)};
+  }
+
+  function clampRail(w) {
+    var b = railBounds();
+    /* Rounded on every path, including the bounds: a fractional ceiling from
+       a min() token would otherwise reach aria-valuenow and get written into
+       settings.json as 270.638. */
+    if (!(w > b.min)) return Math.round(b.min);   // also catches NaN
+    if (w > b.max) return Math.round(b.max);
+    return Math.round(w);
+  }
+
+  function railIsOpen() {
+    return document.documentElement.getAttribute("data-rail") === "open";
+  }
+
+  /* The last width the rail was left open at, restored on the next launch so
+     the collapse toggle has a target to return to. 0 means "never opened". */
+  function railStoredOpen() {
+    try {
+      var v = parseInt(localStorage.getItem(RAIL_OPEN_KEY), 10);
+      return isFinite(v) ? v : 0;
+    } catch (e) { return 0; }
+  }
+
+  /* The drag is continuous over the whole range and the labels are not
+     switched at any threshold: each one is laid out after its icon and
+     clipped by whatever width is left, so widening the rail reveals the text
+     a piece at a time instead of popping it all in at once. --rail-open-min
+     is therefore not a gate, only the width at which the longest label stops
+     being cut off. */
+  function applyRail(w, persist) {
+    var b = railBounds();
+    w = clampRail(w);
+    railWidth = w;
+    var root = document.documentElement;
+    root.style.setProperty("--rail-w", w + "px");
+    /* data-rail is only about the icon strip now, and it drives the chevron
+       and the grip's affordances. It lives on <html> because that is also
+       where the pre-paint script puts it, before #rail exists. */
+    var open = w > b.min;
+    root.setAttribute("data-rail", open ? "open" : "closed");
+    /* While the text is still being cut off, fade its trailing edge so the
+       slice reads as "there is more this way" rather than as a broken
+       layout. The mask comes off once the rail fits the longest label, so a
+       wide rail shows its text at full contrast. */
+    if (open && w < b.open) root.setAttribute("data-rail-tight", "1");
+    else root.removeAttribute("data-rail-tight");
+    var grip = $("railGrip");
+    if (grip) {
+      grip.setAttribute("aria-valuenow", String(w));
+      grip.setAttribute("aria-valuemin", String(b.min));
+      grip.setAttribute("aria-valuemax", String(b.max));
+    }
+    var toggle = $("railToggle");
+    if (toggle) {
+      var label = open ? "طي القايمة الجانبية" : "توسيع القايمة الجانبية";
+      toggle.title = label;
+      toggle.setAttribute("aria-label", label);
+    }
+    if (open && w > railOpenBefore) railOpenBefore = w;
+    /* Persisting is deliberately not part of the drag: one write per gesture,
+       not one per pointermove, so settings.json is not rewritten 60x. */
+    if (persist) {
+      try { localStorage.setItem(RAIL_KEY, String(w)); } catch (e) { /* private mode */ }
+      /* Only an open width is worth keeping as the restore target. */
+      if (open && railOpenBefore > b.min) {
+        try { localStorage.setItem(RAIL_OPEN_KEY, String(railOpenBefore)); }
+        catch (e) { /* private mode */ }
+      }
+      api("set_rail", w);
+    }
+    return w;
+  }
+
+  /* Reconciles the durable copy with what is on screen. Called once the
+     bridge exists: the pre-paint localStorage value already painted the
+     first frame, so this is the recovery path for a cleared WebView2 profile
+     (or a first run on a machine that already has a settings.json). */
+  function syncRailFromSettings(s) {
+    var w = s ? parseInt(s.rail_w, 10) : NaN;
+    if (!isFinite(w) || w === railWidth) return;
+    applyRail(w, false);
+    /* Adopt it locally too, or the two copies would disagree and the rail
+       would visibly re-snap on every launch. No backend write: the value
+       came from there. */
+    try { localStorage.setItem(RAIL_KEY, String(clampRail(w))); } catch (e) {}
+  }
+
+  function initRail() {
+    /* The pre-paint script already wrote --rail-w from localStorage. Adopt
+       whatever is actually on screen as the live width, so the first drag
+       measures from the painted rail rather than the token default. */
+    var shown = parseFloat(getComputedStyle(document.documentElement)
+                             .getPropertyValue("--rail-w"));
+    railWidth = isFinite(shown) ? shown : railBounds().min;
+    /* The restore target comes from storage first, so a width the user dragged
+       to and then collapsed away is still there after a restart. A rail that
+       is currently open is the better answer than a stale stored one. */
+    railOpenBefore = railStoredOpen();
+    if (railWidth > railOpenBefore) railOpenBefore = railWidth;
+    applyRail(railWidth, false);
+
+    var grip = $("railGrip");
+    if (!grip) return;
+
+    var dragging = false, startX = 0, startW = 0, lastW = 0;
+
+    grip.addEventListener("pointerdown", function (e) {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      dragging = true;
+      startX = e.clientX;
+      startW = railWidth;
+      lastW = railWidth;
+      document.documentElement.classList.add("rail-dragging");
+      try { grip.setPointerCapture(e.pointerId); } catch (err) { /* old WebView2 */ }
+      e.preventDefault();
+    });
+
+    grip.addEventListener("pointermove", function (e) {
+      if (!dragging) return;
+      /* The rail is docked to the physical right, so its inner edge is the
+         left one: pulling the pointer left grows the rail. */
+      lastW = applyRail(startW - (e.clientX - startX), false);
+    });
+
+    function endDrag(e) {
+      if (!dragging) return;
+      dragging = false;
+      document.documentElement.classList.remove("rail-dragging");
+      try { grip.releasePointerCapture(e.pointerId); } catch (err) {}
+      /* Any width is a real resting width: the rail keeps whatever the
+         pointer left it at, and the labels stay clipped to fit. */
+      applyRail(lastW, true);
+    }
+    grip.addEventListener("pointerup", endDrag);
+    grip.addEventListener("pointercancel", endDrag);
+
+    /* Keyboard resize. The grip is a separator with no click action, so it
+       answers arrows and Home/End rather than Enter. */
+    grip.addEventListener("keydown", function (e) {
+      var b = railBounds(), next = null;
+      if (e.key === "ArrowLeft") next = railWidth + RAIL_STEP;
+      else if (e.key === "ArrowRight") next = railWidth - RAIL_STEP;
+      else if (e.key === "Home") next = b.min;
+      else if (e.key === "End") next = b.max;
+      if (next === null) return;
+      e.preventDefault();
+      applyRail(next, true);
+    });
+
+    var toggle = $("railToggle");
+    if (toggle) {
+      toggle.addEventListener("click", function () {
+        var b = railBounds();
+        /* A remembered open width wins over the default. Taking the larger of
+           the two would always pick the default and quietly discard a width
+           the user had deliberately dragged to. */
+        var reopen = railOpenBefore > b.min ? railOpenBefore : b.open;
+        applyRail(railIsOpen() ? b.min : reopen, true);
+      });
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
    * Sidebar pages
    * ------------------------------------------------------------------ */
-  var railBtns = document.querySelectorAll(".rail-btn");
+  /* Scoped to [data-page] so the rail's own controls — the update notice and
+     the collapse button — cannot take the active state off a real tab. */
+  var railBtns = document.querySelectorAll(".rail-btn[data-page]");
   Array.prototype.forEach.call(railBtns, function (btn) {
     btn.addEventListener("click", function () {
       Array.prototype.forEach.call(railBtns, function (b) {
@@ -1576,6 +1794,10 @@
         // Theme first: the backend wins when it holds an explicit choice,
         // otherwise the local pre-paint value (or light) stays.
         if (s.theme === "dark" || s.theme === "light") applyTheme(s.theme);
+        // Same rule for the rail width: the pre-paint value already painted
+        // the first frame, and this only corrects it if the durable copy
+        // disagrees.
+        syncRailFromSettings(s);
         state.kind = s.kind || state.kind;
         state.minPrice = s.min_price || "";
         // saved_query is the last keyword the user searched. Pre-filling it
@@ -1609,6 +1831,7 @@
     if (themeBtn) themeBtn.addEventListener("click", function (e) {
       toggleThemeAnimated(e);
     });
+    initRail();
     renderColMenu();
     apply();
     setInterval(poll, 1000);
