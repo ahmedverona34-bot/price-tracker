@@ -181,10 +181,13 @@ KIND_CHOICES = (KIND_DEVICES, KIND_ACCESSORIES, KIND_ALL)
 
 # Appearance presets inspired by terminalcolors.com palettes. IDs are stable
 # (persisted in settings.json); labels are Arabic for the settings page.
-# Hex values follow the official palettes: Dracula #282a36/#bd93f9/#ff79c6,
-# Tokyo Night #1a1b26/#7aa2f7/#bb9af7, Catppuccin Mocha #1e1e2e/#cba6f7,
+# Dark hex follow the official palettes: Dracula #282a36/#bd93f9,
+# Tokyo Night #1a1b26/#7aa2f7, Catppuccin Mocha #1e1e2e/#cba6f7,
 # Nord #2e3440/#88c0d0, Gruvbox #282828/#fabd2f, Solarized #002b36/#268bd2,
-# One Dark #282c34/#61afef.
+# One Dark #282c34/#61afef. Each id also has a light counterpart
+# (Alucard #fffbeb, Tokyo Day #e1e2e7, Latte #eff1f5, Gruvbox light
+# #fbf1c7, Solarized light #fdf6e3, One Light #fafafa, Nord light derived
+# from Snow Storm #eceff4), so the light/dark toggle never clashes.
 APPEARANCES = ("default", "dracula", "tokyo-night", "catppuccin",
                "nord", "gruvbox", "solarized", "one-dark")
 FONT_SCALES = ("small", "medium", "large")

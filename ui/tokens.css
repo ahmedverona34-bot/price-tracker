@@ -220,15 +220,24 @@
 /* ===========================================================================
    Appearance presets — terminal palettes from terminalcolors.com.
    ---------------------------------------------------------------------------
-   Applied via html[data-appearance="…"], on top of the dark tokens above.
-   Every rule in styles.css reads var(--…), so flipping the attribute
-   repaints the whole window. "default" has no override (current theme).
-   Sources: Dracula #282a36/#bd93f9/#ff79c6, Tokyo Night #1a1b26/#7aa2f7,
+   Dark presets apply via html[data-theme="dark"][data-appearance], on top
+   of the dark tokens above. Light presets (further below) apply via
+   html[data-theme="light"][data-appearance], on top of the light override.
+   Every rule in styles.css reads var(--…), so flipping either attribute
+   repaints the whole window with no mixed-theme clash. "default" has no
+   override (current theme).
+   Dark sources: Dracula #282a36/#bd93f9/#ff79c6, Tokyo Night #1a1b26/#7aa2f7,
    Catppuccin Mocha #1e1e2e/#cba6f7, Nord #2e3440/#88c0d0,
    Gruvbox #282828/#fabd2f, Solarized #002b36/#268bd2,
    One Dark #282c34/#61afef.
+   Light sources: Alucard #fffbeb/#644ac9 (official Dracula light),
+   Tokyo Day #e1e2e7/#2e7de9, Catppuccin Latte #eff1f5/#1e66f5,
+   Gruvbox light #fbf1c7/#d79921, Solarized light #fdf6e3/#268bd2,
+   One Light #fafafa/#4078f2. Nord light is derived from Snow Storm
+   (#eceff4/#2e3440, terminalcolors ships no nord light); its green/yellow/
+   red are darkened one step for light-bg contrast.
    =========================================================================== */
-html[data-appearance="dracula"] {
+html[data-theme="dark"][data-appearance="dracula"] {
   --surface-container-lowest: #282a36;
   --surface-container-low: #21222c;
   --surface-container: #343746;
@@ -252,7 +261,7 @@ html[data-appearance="dracula"] {
   --shadow-cta: 0 4px 14px rgba(189, 147, 249, 0.35);
   --shadow-cta-hov: 0 6px 20px rgba(189, 147, 249, 0.50);
 }
-html[data-appearance="tokyo-night"] {
+html[data-theme="dark"][data-appearance="tokyo-night"] {
   --surface-container-lowest: #1a1b26;
   --surface-container-low: #16161e;
   --surface-container: #24283b;
@@ -276,7 +285,7 @@ html[data-appearance="tokyo-night"] {
   --shadow-cta: 0 4px 14px rgba(122, 162, 247, 0.35);
   --shadow-cta-hov: 0 6px 20px rgba(122, 162, 247, 0.50);
 }
-html[data-appearance="catppuccin"] {
+html[data-theme="dark"][data-appearance="catppuccin"] {
   --surface-container-lowest: #1e1e2e;
   --surface-container-low: #181825;
   --surface-container: #313244;
@@ -300,7 +309,7 @@ html[data-appearance="catppuccin"] {
   --shadow-cta: 0 4px 14px rgba(137, 180, 250, 0.35);
   --shadow-cta-hov: 0 6px 20px rgba(137, 180, 250, 0.50);
 }
-html[data-appearance="nord"] {
+html[data-theme="dark"][data-appearance="nord"] {
   --surface-container-lowest: #2e3440;
   --surface-container-low: #242933;
   --surface-container: #3b4252;
@@ -324,7 +333,7 @@ html[data-appearance="nord"] {
   --shadow-cta: 0 4px 14px rgba(94, 129, 172, 0.40);
   --shadow-cta-hov: 0 6px 20px rgba(94, 129, 172, 0.55);
 }
-html[data-appearance="gruvbox"] {
+html[data-theme="dark"][data-appearance="gruvbox"] {
   --surface-container-lowest: #282828;
   --surface-container-low: #1d2021;
   --surface-container: #3c3836;
@@ -348,7 +357,7 @@ html[data-appearance="gruvbox"] {
   --shadow-cta: 0 4px 14px rgba(215, 153, 33, 0.40);
   --shadow-cta-hov: 0 6px 20px rgba(215, 153, 33, 0.55);
 }
-html[data-appearance="solarized"] {
+html[data-theme="dark"][data-appearance="solarized"] {
   --surface-container-lowest: #002b36;
   --surface-container-low: #073642;
   --surface-container: #0e4a5a;
@@ -372,7 +381,7 @@ html[data-appearance="solarized"] {
   --shadow-cta: 0 4px 14px rgba(38, 139, 210, 0.40);
   --shadow-cta-hov: 0 6px 20px rgba(38, 139, 210, 0.55);
 }
-html[data-appearance="one-dark"] {
+html[data-theme="dark"][data-appearance="one-dark"] {
   --surface-container-lowest: #282c34;
   --surface-container-low: #21252b;
   --surface-container: #2c313c;
@@ -428,4 +437,179 @@ html[data-font-scale="large"] {
   --fs-headline-sm-size: 18px; --fs-headline-sm-lh: 26px;
   --fs-label-md-size: 13px; --fs-label-md-lh: 18px;
   --fs-label-sm-size: 12px; --fs-label-sm-lh: 16px;
+}
+
+/* ===========================================================================
+   Appearance presets, light variants — official light palettes.
+   ---------------------------------------------------------------------------
+   Same preset id, other theme: switching light/dark keeps the family but
+   never mixes dark surfaces into the light window (or vice versa).
+   =========================================================================== */
+html[data-theme="light"][data-appearance="dracula"] {
+  --surface-container-lowest: #fffbeb;
+  --surface-container-low: #efeddc;
+  --surface-container: #ece9df;
+  --surface-container-high: #dedccf;
+  --surface-container-highest: #ceccc0;
+  --on-surface: #1f1f1f;
+  --on-surface-variant: #6c664b;
+  --outline: #6c664b;
+  --outline-variant: #dedccf;
+  --primary: #644ac9;
+  --primary-container: #644ac9;
+  --on-primary-container: #ffffff;
+  --inverse-primary: #a3144d;
+  --surface-tint: #644ac9;
+  --secondary: #14710a;
+  --secondary-container: #14710a;
+  --tertiary: #a34d14;
+  --error: #cb3a2a;
+  --primary-10: rgba(100, 74, 201, 0.08);
+  --primary-15: rgba(100, 74, 201, 0.12);
+  --shadow-cta: 0 4px 14px rgba(100, 74, 201, 0.25);
+  --shadow-cta-hov: 0 6px 20px rgba(100, 74, 201, 0.35);
+}
+html[data-theme="light"][data-appearance="tokyo-night"] {
+  --surface-container-lowest: #e1e2e7;
+  --surface-container-low: #d8dbe3;
+  --surface-container: #e9e9ed;
+  --surface-container-high: #d0d3e1;
+  --surface-container-highest: #b4b5b9;
+  --on-surface: #3760bf;
+  --on-surface-variant: #6172b0;
+  --outline: #6172b0;
+  --outline-variant: #c9cede;
+  --primary: #2e7de9;
+  --primary-container: #2e7de9;
+  --on-primary-container: #ffffff;
+  --inverse-primary: #9854f1;
+  --surface-tint: #2e7de9;
+  --secondary: #587539;
+  --secondary-container: #587539;
+  --tertiary: #8c6c3e;
+  --error: #f52a65;
+  --primary-10: rgba(46, 125, 233, 0.08);
+  --primary-15: rgba(46, 125, 233, 0.12);
+  --shadow-cta: 0 4px 14px rgba(46, 125, 233, 0.25);
+  --shadow-cta-hov: 0 6px 20px rgba(46, 125, 233, 0.35);
+}
+html[data-theme="light"][data-appearance="catppuccin"] {
+  --surface-container-lowest: #eff1f5;
+  --surface-container-low: #e6e9ef;
+  --surface-container: #ffffff;
+  --surface-container-high: #dce0e8;
+  --surface-container-highest: #ccd0da;
+  --on-surface: #4c4f69;
+  --on-surface-variant: #5c5f77;
+  --outline: #8c8fa1;
+  --outline-variant: #dce0e8;
+  --primary: #1e66f5;
+  --primary-container: #1e66f5;
+  --on-primary-container: #ffffff;
+  --inverse-primary: #8839ef;
+  --surface-tint: #1e66f5;
+  --secondary: #40a02b;
+  --secondary-container: #40a02b;
+  --tertiary: #df8e1d;
+  --error: #d20f39;
+  --primary-10: rgba(30, 102, 245, 0.08);
+  --primary-15: rgba(30, 102, 245, 0.12);
+  --shadow-cta: 0 4px 14px rgba(30, 102, 245, 0.25);
+  --shadow-cta-hov: 0 6px 20px rgba(30, 102, 245, 0.35);
+}
+html[data-theme="light"][data-appearance="nord"] {
+  --surface-container-lowest: #eceff4;
+  --surface-container-low: #e5e9f0;
+  --surface-container: #ffffff;
+  --surface-container-high: #d8dee9;
+  --surface-container-highest: #c9d2e0;
+  --on-surface: #2e3440;
+  --on-surface-variant: #434c5e;
+  --outline: #4c566a;
+  --outline-variant: #d8dee9;
+  --primary: #5e81ac;
+  --primary-container: #5e81ac;
+  --on-primary-container: #ffffff;
+  --inverse-primary: #81a1c1;
+  --surface-tint: #5e81ac;
+  --secondary: #75915f;
+  --secondary-container: #75915f;
+  --tertiary: #c49a45;
+  --error: #b0525e;
+  --primary-10: rgba(94, 129, 172, 0.10);
+  --primary-15: rgba(94, 129, 172, 0.14);
+  --shadow-cta: 0 4px 14px rgba(94, 129, 172, 0.30);
+  --shadow-cta-hov: 0 6px 20px rgba(94, 129, 172, 0.40);
+}
+html[data-theme="light"][data-appearance="gruvbox"] {
+  --surface-container-lowest: #fbf1c7;
+  --surface-container-low: #f2e5bc;
+  --surface-container: #ebdbb2;
+  --surface-container-high: #d5c4a1;
+  --surface-container-highest: #bdae93;
+  --on-surface: #3c3836;
+  --on-surface-variant: #7c6f64;
+  --outline: #928374;
+  --outline-variant: #ebdbb2;
+  --primary: #b57614;
+  --primary-container: #d79921;
+  --on-primary-container: #3c3836;
+  --inverse-primary: #af3a03;
+  --surface-tint: #d79921;
+  --secondary: #79740e;
+  --secondary-container: #79740e;
+  --tertiary: #af3a03;
+  --error: #9d0006;
+  --primary-10: rgba(215, 153, 33, 0.12);
+  --primary-15: rgba(215, 153, 33, 0.16);
+  --shadow-cta: 0 4px 14px rgba(215, 153, 33, 0.30);
+  --shadow-cta-hov: 0 6px 20px rgba(215, 153, 33, 0.40);
+}
+html[data-theme="light"][data-appearance="solarized"] {
+  --surface-container-lowest: #fdf6e3;
+  --surface-container-low: #eee8d5;
+  --surface-container: #ffffff;
+  --surface-container-high: #eee8d5;
+  --surface-container-highest: #d9cfae;
+  --on-surface: #586e75;
+  --on-surface-variant: #657b83;
+  --outline: #93a1a1;
+  --outline-variant: #eee8d5;
+  --primary: #268bd2;
+  --primary-container: #268bd2;
+  --on-primary-container: #ffffff;
+  --inverse-primary: #2aa198;
+  --surface-tint: #268bd2;
+  --secondary: #859900;
+  --secondary-container: #859900;
+  --tertiary: #b58900;
+  --error: #dc322f;
+  --primary-10: rgba(38, 139, 210, 0.08);
+  --primary-15: rgba(38, 139, 210, 0.12);
+  --shadow-cta: 0 4px 14px rgba(38, 139, 210, 0.25);
+  --shadow-cta-hov: 0 6px 20px rgba(38, 139, 210, 0.35);
+}
+html[data-theme="light"][data-appearance="one-dark"] {
+  --surface-container-lowest: #fafafa;
+  --surface-container-low: #f0f0f1;
+  --surface-container: #ffffff;
+  --surface-container-high: #eaeaeb;
+  --surface-container-highest: #d3d3d6;
+  --on-surface: #383a42;
+  --on-surface-variant: #6b6e76;
+  --outline: #a0a1a7;
+  --outline-variant: #eaeaeb;
+  --primary: #4078f2;
+  --primary-container: #4078f2;
+  --on-primary-container: #ffffff;
+  --inverse-primary: #a626a4;
+  --surface-tint: #4078f2;
+  --secondary: #50a14f;
+  --secondary-container: #50a14f;
+  --tertiary: #c18401;
+  --error: #e45649;
+  --primary-10: rgba(64, 120, 242, 0.08);
+  --primary-15: rgba(64, 120, 242, 0.12);
+  --shadow-cta: 0 4px 14px rgba(64, 120, 242, 0.25);
+  --shadow-cta-hov: 0 6px 20px rgba(64, 120, 242, 0.35);
 }
