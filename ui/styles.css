@@ -1182,16 +1182,46 @@ input[type="checkbox"]:disabled { opacity: 0.4; cursor: default; }
 }
 .empty p { margin: 0; font-size: var(--fs-body-sm-size); line-height: var(--fs-body-sm-lh); color: var(--on-surface-variant); }
 
-.skel-row td { padding: 14px var(--space-md); }
-.skel-row .bar {
+/* Skeleton placeholders. One shimmer sweep shared by every bar via a single
+   animation name, and the delay is negative per row so the rows are already
+   mid-sweep on the first frame instead of all pulsing in lockstep — which
+   reads as a strobe rather than as loading. */
+.skel-row {
+  /* The row fade-up is scroll-driven; a placeholder must not animate in. */
+  animation: none !important;
+}
+.skel-row td { padding: 12px var(--space-md); }
+.skel-row .sk {
+  display: block;
   height: 12px;
   border-radius: var(--r-full);
   background: linear-gradient(90deg, var(--surface-container-high) 0%,
               var(--surface-container-highest) 50%, var(--surface-container-high) 100%);
   background-size: 200% 100%;
-  animation: shimmer 1.2s linear infinite;
+  animation: shimmer 1.4s linear infinite;
+  animation-delay: calc(var(--skel-i, 0) * -140ms);
 }
+/* Two-line product title, same as the real cell stacks its name and hint. */
+.skel-row .sk-sub { margin-top: 8px; opacity: .6; }
+.skel-row .sk-thumb {
+  width: 40px; height: 40px;
+  border-radius: var(--r-lg);
+}
+.skel-row .sk-round {
+  width: 28px; height: 28px;
+  border-radius: var(--r-full);
+}
+.skel-row .sk-check {
+  width: 15px; height: 15px;
+  border-radius: 4px;
+}
+/* Numeric columns are right-aligned, so their placeholder sits with them
+   instead of hanging off the far edge. */
+.skel-row td.num .sk { margin-left: auto; }
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .skel-row .sk { animation: none; }
+}
 
 /* ===========================================================================
    Sources / status / settings

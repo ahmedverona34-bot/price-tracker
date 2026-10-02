@@ -58,6 +58,7 @@
     rowsToken: -1,
     pinned: false,
     wasSearching: false,
+    landTimer: 0,          // clears the results-landing animation class
     lastMsg: "",
     lastUpdatedAt: ""
   };
@@ -859,18 +860,47 @@
     $("searchBtn").disabled = true;
   }
 
+  /* Loading placeholder drawn in the shape of the rows it replaces: same
+     columns, same widths, so the table does not jump when the real rows land.
+     The widths are per column rather than one full-width bar because a single
+     bar reads as a progress line, not as a table that is still filling up. */
+  var SKEL_W = {
+    image: "40px", site: "78px", before: "64px", after: "96px",
+    discount: "44px", link: "28px", time: "56px", note: "64px"
+  };
+  /* Title bars vary per row and carry a second, shorter line, the way a real
+     product title wraps — a column of identical bars looks like a bug. */
+  var SKEL_TITLE = [92, 74, 86, 63, 88, 79, 68, 84, 71, 90];
+
+  function skelCellHtml(key, i) {
+    if (key === "image") return '<span class="sk sk-thumb"></span>';
+    if (key === "link") return '<span class="sk sk-round"></span>';
+    if (key === "title") {
+      var w = SKEL_TITLE[i % SKEL_TITLE.length];
+      return '<span class="sk sk-line" style="width:' + w + '%"></span>'
+        + '<span class="sk sk-line sk-sub" style="width:' + (w - 24) + '%"></span>';
+    }
+    return '<span class="sk sk-line" style="width:' + (SKEL_W[key] || "72px") + '"></span>';
+  }
+
   function renderSkeletons() {
     var tb = $("tbody");
-    // +1 for the leading checkbox column the header now renders.
-    var cols = state.cols.length + 1;
+    var cols = orderCols(state.cols);
     var html = "";
     for (var i = 0; i < 10; i++) {
-      html += '<tr class="skel-row"><td colspan="' + cols
-        + '"><div class="bar"></div></td></tr>';
+      // +1 for the leading checkbox column the header now renders.
+      var tds = '<td class="c-pick"><span class="sk sk-check"></span></td>';
+      for (var c = 0; c < cols.length; c++) {
+        var key = cols[c];
+        var cls = cellClass(key);
+        if (COL_ALIGN[key]) cls += " " + COL_ALIGN[key];
+        tds += '<td class="skel-cell ' + cls.trim() + '">'
+          + skelCellHtml(key, i) + "</td>";
+      }
+      html += '<tr class="skel-row" style="--skel-i:' + i + '">' + tds + "</tr>";
     }
     tb.innerHTML = html;
     tb.__html = html;
-    $("empty").classList.add("hidden");
     $("noMatch").classList.add("hidden");
     $("rowCount").textContent = "…";
     $("rowTotal").textContent = "";
@@ -1307,11 +1337,19 @@
     }
     if (!state.rows.length) {
       setHTML(tb, "");
-      $("noMatch").classList.add("hidden");
-      $("empty").classList.remove("hidden");
-      $("empty").querySelector("h3").textContent = st.last_query
-        ? "لا توجد نتائج — يُرجى تجربة كلمة بحث أخرى"
-        : "اكتب كلمة البحث في الحقل أعلاه ثم اضغط على زر البحث";
+      /* Nothing on screen until a search has actually run: with no rows and no
+         previous query this is just a freshly opened window, and a prompt
+         there is noise. Once a query has run, reuse the no-match panel — the
+         filter copy does not apply here, so both its lines are rewritten. */
+      if (!st.last_query) {
+        $("noMatch").classList.add("hidden");
+      } else {
+        $("noMatch").classList.remove("hidden");
+        $("noMatch").querySelector("h3").textContent = "مفيش نتائج للبحث ده";
+        $("noMatchWhy").textContent = "لم يصل أي منتج لـ \""
+          + st.last_query + "\" — جرّب كلمة تانية أو وسّع نطاق السعر";
+        $("resetFiltersBtn").classList.add("hidden");
+      }
       $("rowCount").textContent = "";
       $("rowTotal").textContent = "";
       $("summary").innerHTML = "";
@@ -1322,7 +1360,6 @@
       return;
     }
 
-    $("empty").classList.add("hidden");
     $("sectionTitle").textContent = st.last_query
       ? 'نتائج "' + st.last_query + '"' : "نتائج البحث";
 
@@ -1331,6 +1368,10 @@
       // one to relax, and offer one click back to all rows.
       setHTML(tb, "");
       $("noMatch").classList.remove("hidden");
+      $("noMatch").querySelector("h3").textContent = "لا توجد نتائج ضمن هذا الفلتر";
+      // Only the filter case has something to reset; the empty-search copy
+      // above would leave a button that clears filters that were never set.
+      $("resetFiltersBtn").classList.remove("hidden");
       $("rowCount").textContent = "0 صف";
       $("rowTotal").textContent = "";
       $("summary").textContent = "";
@@ -1370,6 +1411,22 @@
        market, then sort or filter it down. */
     var slice = v.rows;
     var cols = orderCols(state.cols);
+
+    /* Rows landing on the skeleton get the app's own entrance animation. The
+       scroll-driven row reveal in animations.css cannot do this: a row drawn
+       while already inside the viewport is at its final state from frame one,
+       so results arriving under the user's eyes would pop in with no motion. */
+    var landing = tb.querySelector(".skel-row") !== null;
+    if (landing) {
+      tb.classList.remove("landed");
+      tb.classList.add("landed");
+      // The class is what the animation is scoped to, so it has to come back
+      // off or the next search's rows would replay with no delay left.
+      window.clearTimeout(state.landTimer);
+      state.landTimer = window.setTimeout(function () {
+        tb.classList.remove("landed");
+      }, 900);
+    }
 
     setHTML(tb, slice.map(function (r) {
       var tds = '<td class="c-pick">'

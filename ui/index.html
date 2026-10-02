@@ -212,13 +212,9 @@ try {
               <thead><tr id="headRow"></tr></thead>
               <tbody id="tbody"></tbody>
             </table>
-            <div id="empty" class="empty">
-              <span class="empty-mark float-subtle">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-              </span>
-              <h3>اكتب كلمة البحث في الحقل أعلاه ثم اضغط على زر البحث</h3>
-              <p>مثال: آيفون، سامسونج، لابتوب</p>
-            </div>
+            <!-- No startup prompt: the table starts bare and the skeleton takes
+                 over the moment a search runs. This panel is only for a search
+                 that came back with nothing. -->
             <div id="noMatch" class="empty hidden">
               <span class="empty-mark float-subtle">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v5"/><path d="M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></svg>

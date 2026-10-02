@@ -112,6 +112,30 @@ input.custom-checkbox:checked { background-image: none; }
   }
 }
 
+/* Search results landing on the skeleton: the same fade-up keyframe the window
+   already uses, with a short per-row stagger. Scroll-driven row reveals cannot
+   cover this case — rows drawn while already inside the viewport start at their
+   final state, so a result set that arrives under the user's eyes would just
+   pop in. Only the first screenful is staggered; past that the rows are below
+   the fold and the scroll timeline takes over as they scroll in. */
+@media (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: view()) {
+    #grid tbody.landed tr {
+      animation: row-fade-in 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+      animation-timeline: auto;
+    }
+    #grid tbody.landed tr:nth-child(1) { animation-delay: 0ms; }
+    #grid tbody.landed tr:nth-child(2) { animation-delay: 45ms; }
+    #grid tbody.landed tr:nth-child(3) { animation-delay: 90ms; }
+    #grid tbody.landed tr:nth-child(4) { animation-delay: 135ms; }
+    #grid tbody.landed tr:nth-child(5) { animation-delay: 180ms; }
+    #grid tbody.landed tr:nth-child(6) { animation-delay: 225ms; }
+    #grid tbody.landed tr:nth-child(7) { animation-delay: 270ms; }
+    #grid tbody.landed tr:nth-child(8) { animation-delay: 315ms; }
+    #grid tbody.landed tr:nth-child(n+9) { animation-delay: 350ms; }
+  }
+}
+
 /* First-paint entrances for the static page sections, reusing the same
    fade-up keyframe so the whole window speaks one motion language. */
 .rise { animation: row-fade-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
