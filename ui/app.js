@@ -149,14 +149,14 @@
    * <html> repaint from tokens.css, localStorage pre-paints the first
    * frame, settings.json carries it via the backend. */
   var APPEARANCES = [
-    { id: "default", label: "الافتراضي", sw: "#2563eb" },
-    { id: "dracula", label: "دراكولا", sw: "#bd93f9" },
-    { id: "nord", label: "نورد", sw: "#88c0d0" },
-    { id: "gruvbox", label: "جروفبوكس", sw: "#fabd2f" },
-    { id: "everforest", label: "إيفر فورست", sw: "#a7c080" },
-    { id: "rose-pine", label: "روز باين", sw: "#ebbcba" },
-    { id: "ayu", label: "آيو", sw: "#ff8f40" },
-    { id: "kanagawa", label: "كاناجاوا", sw: "#d27e99" }
+    { id: "default", label: "Default" },
+    { id: "dracula", label: "Dracula" },
+    { id: "nord", label: "Nord" },
+    { id: "gruvbox", label: "Gruvbox" },
+    { id: "everforest", label: "Everforest" },
+    { id: "rose-pine", label: "Rose Pine" },
+    { id: "ayu", label: "Ayu" },
+    { id: "kanagawa", label: "Kanagawa" }
   ];
   var FONT_SCALES = ["small", "medium", "large"];
   var FONT_LABELS = { small: "صغير", medium: "متوسط", large: "كبير" };
@@ -192,8 +192,7 @@
     if (!grid) return;
     setHTML(grid, APPEARANCES.map(function (x) {
       return '<button class="appear-opt' + (x.id === current ? " active" : "")
-        + '" data-appear="' + x.id + '" type="button">'
-        + '<span class="appear-sw" style="background:' + x.sw + '"></span>'
+        + '" data-appear="' + x.id + '" type="button" lang="en">'
         + "<span>" + esc(x.label) + "</span></button>";
     }).join(""));
     Array.prototype.forEach.call(
@@ -745,15 +744,13 @@
 
   function renderSiteStats(sites) {
     var on = sites.filter(function (s) { return s.enabled !== false; });
-    var ok = sites.filter(function (s) { return s.status === "ok"; }).length;
     var durs = sites.map(function (s) { return s.duration_sec || 0; })
       .filter(function (d) { return d > 0; });
     var avg = durs.length
       ? (durs.reduce(function (a, b) { return a + b; }, 0) / durs.length).toFixed(1)
       : null;
-    var rate = on.length ? Math.round(100 * ok / on.length) : null;
-    // Four tiles in the design's arrangement: volume, how many are live, how
-    // fast, how reliable. All four come out of the same get_sites payload.
+    // Three tiles in the design's arrangement: volume, how many are live,
+    // how fast. All three come out of the same get_sites payload.
     var speed = avg == null ? null : Math.max(10, Math.min(100,
       Math.round(100 - avg * 4)));
     setHTML($("siteStats"), [
@@ -769,12 +766,7 @@
         foot: avg == null ? "بانتظار أول بحث" : "لكل موقع",
         icon: "speed", tone: speed == null ? "" : speed >= 80 ? "green"
               : speed >= 50 ? "amber" : "",
-        pct: speed, footTone: speed == null ? "" : speed >= 50 ? "" : "amber" }),
-      statCard({ label: "نسبة نجاح البحث والمطابقة",
-        value: rate == null ? "—" : rate + "%",
-        foot: ok + " موقع شغال الآن", icon: "check",
-        tone: rate == null ? "" : rate >= 80 ? "green" : rate >= 50 ? "amber" : "",
-        pct: rate == null ? 0 : rate })
+        pct: speed, footTone: speed == null ? "" : speed >= 50 ? "" : "amber" })
     ].join(""));
   }
 
@@ -879,6 +871,21 @@
   $("searchBtn").addEventListener("click", doSearch);
   $("q").addEventListener("keydown", function (e) {
     if (e.key === "Enter") doSearch();
+  });
+
+  /* The countdown icon is a real button: one click re-scrapes the armed
+     query right now, and the backend re-arms the countdown from the full
+     interval. With no armed query yet it just runs a normal search. */
+  var refreshBtn = $("refreshNowBtn");
+  if (refreshBtn) refreshBtn.addEventListener("click", function () {
+    var armed = state.status && state.status.last_query;
+    if (!armed) { doSearch(); return; }
+    if (state.status && state.status.searching) return;
+    showSearching();
+    api("refresh_now").then(function (res) {
+      if (res && res.message) toast(res.message);
+      poll(true);
+    });
   });
 
   /* ------------------------------------------------------------------ *
@@ -1616,6 +1623,8 @@
     var text = st.last_query ? fmtCountdown(st.countdown_sec) : "";
     if (cd.textContent !== text) cd.textContent = text;
     $("searchBtn").disabled = !!st.searching;
+    var rb = $("refreshNowBtn");
+    if (rb) rb.classList.toggle("spinning", !!st.searching);
   }
 
   function syncFromStatus(st) {

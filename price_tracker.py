@@ -1646,6 +1646,12 @@ class TrackerCore:
     def set_auto(self, on):
         self.auto_refresh = bool(on)
         self.save_settings()
+        if (self.auto_refresh and self.last_query and not self.searching
+                and not self.next_refresh_at and self.refresh_every):
+            # Re-enabled with an armed query but a disarmed clock (e.g. after
+            # a manual-only stretch): start the countdown instead of staying
+            # silent until the next manual search.
+            self._schedule_next()
 
     def set_theme(self, theme):
         """Light/dark choice from the topbar toggle; persisted like kind."""
@@ -1699,8 +1705,23 @@ class TrackerCore:
         self.settings["refresh_sec"] = sec
         self.save_settings()
         if self.last_query and self.auto_refresh:
-            self.next_refresh_at = time.time() + sec
+            # Re-arm from now so the countdown immediately reflects the new
+            # choice instead of finishing the previous cadence first.
+            self._schedule_next()
         return True
+
+    def refresh_now(self):
+        """Immediate re-scrape of the armed query from the refresh button.
+
+        start_search() re-arms the countdown, so the timer restarts from
+        the full interval after the manual refresh.
+        """
+        if self.searching:
+            return False
+        q = (self.last_query or "").strip()
+        if not q:
+            return False
+        return self.start_search(q)
 
     def get_logs(self, limit=60):
         """Last lines of app.log for the status page (technical, untranslated)."""
@@ -1750,8 +1771,11 @@ class TrackerCore:
         self.save_settings()
         self.searching = True
         # The countdown only starts once a real search has run, so it always
-        # describes work the user has actually asked for.
-        self.next_refresh_at = time.time() + self.refresh_every
+        # describes work the user has actually asked for. Manual-only mode
+        # (refresh_every == 0) arms nothing: the scheduler stays quiet until
+        # the user picks a cadence again.
+        self.next_refresh_at = (time.time() + self.refresh_every
+                                if self.refresh_every else 0.0)
         self.search_gen += 1
         gen = self.search_gen
         self._set_status('يجري البحث عن "%s"...' % q)
@@ -2096,8 +2120,20 @@ class TrackerCore:
             return AUTO_REFRESH_SEC
 
     def _schedule_next(self, gen=None):
-        """Arm each site's next refresh and the countdown the page shows."""
+        """Arm each site's next refresh and the countdown the page shows.
+
+        The user's chosen cadence (refresh_every) is the base: a site only
+        waits longer than that when it declares its own heavier minimum
+        (Dubai Phone's refresh_sec). Sites without their own declaration
+        follow the global choice exactly, so the countdown always matches
+        what the user picked. 0 means manual-only: nothing is armed.
+        """
         now = time.time()
+        if not self.refresh_every:
+            for s in self.sites:
+                self.site_next_at.pop(s.get("name", "?"), None)
+            self.next_refresh_at = 0.0
+            return
         disabled = set(self.disabled_sites())
         soonest = None
         for s in self.sites:
@@ -2112,7 +2148,11 @@ class TrackerCore:
                 self.site_next_at[name] = due
                 soonest = due if soonest is None else min(soonest, due)
                 continue
-            due = now + self.site_interval(s)
+            try:
+                declared = int(s.get("refresh_sec") or 0)
+            except (TypeError, ValueError):
+                declared = 0
+            due = now + max(self.refresh_every, declared)
             self.site_next_at[name] = due
             soonest = due if soonest is None else min(soonest, due)
         self.next_refresh_at = soonest or 0.0
@@ -2557,6 +2597,11 @@ class Api:
 
     def set_refresh_sec(self, sec):
         return {"ok": self._core.set_refresh_sec(sec)}
+
+    def refresh_now(self):
+        ok = self._core.refresh_now()
+        return {"ok": ok, "started": ok,
+                "message": self._core.get_status()["message"]}
 
     def check_update(self, max_age=None):
         # max_age comes from the page so a repeating check is answered
