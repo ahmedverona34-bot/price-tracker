@@ -129,8 +129,8 @@
     document.documentElement.setAttribute("data-theme", t);
     try { localStorage.setItem(THEME_KEY, t); } catch (e) { /* private mode */ }
     var moon = $("themeIconMoon"), sun = $("themeIconSun"), btn = $("themeBtn");
-    if (moon) moon.classList.toggle("hidden", t !== "light");
-    if (sun) sun.classList.toggle("hidden", t !== "dark");
+    if (moon) moon.classList.toggle("hidden", t !== "dark");
+    if (sun) sun.classList.toggle("hidden", t !== "light");
     if (btn) btn.title = (t === "light")
       ? "التبديل إلى الوضع الداكن" : "التبديل إلى الوضع الفاتح";
   }
@@ -688,7 +688,8 @@
     if (!railBtn) return;
 
     api("app_version").then(function (v) {
-      if (v && v.version) $("railVer").textContent = "v" + v.version;
+      var rv = $("railVer");
+      if (v && v.version && rv) rv.textContent = "v" + v.version;
     });
 
     function show(msg) { toast(msg); }
