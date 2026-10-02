@@ -482,9 +482,13 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * Sidebar pages
-   * ------------------------------------------------------------------ */
-  var railBtns = document.querySelectorAll(".rail-btn");
+   * Sidebar pages.
+   * ------------------------------------------------------------------ *
+   * Scoped to .rail-nav on purpose: the rail-bottom carries action buttons
+   * (theme toggle, update notice) that must never switch pages. Giving one
+   * of those the .rail-btn look without this scoping blanks the window,
+   * because no .page matches "page-undefined". */
+  var railBtns = document.querySelectorAll(".rail-nav .rail-btn");
   Array.prototype.forEach.call(railBtns, function (btn) {
     btn.addEventListener("click", function () {
       Array.prototype.forEach.call(railBtns, function (b) {
