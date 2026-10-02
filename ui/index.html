@@ -14,6 +14,10 @@ try {
   var t = localStorage.getItem("pt-theme");
   if (t === "dark" || t === "light")
     document.documentElement.setAttribute("data-theme", t);
+  var a = localStorage.getItem("pt-appearance");
+  if (a) document.documentElement.setAttribute("data-appearance", a);
+  var fs = localStorage.getItem("pt-font-scale");
+  if (fs) document.documentElement.setAttribute("data-font-scale", fs);
 } catch (e) {}
 </script>
 </head>
@@ -402,6 +406,36 @@ try {
             </div>
             <div class="card-body">
               <div id="defaultCols" class="col-grid"></div>
+            </div>
+          </section>
+
+          <!-- Section 5: appearance (terminal palettes + font size) -->
+          <section class="card set-card">
+            <div class="card-head">
+              <span class="card-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>
+              </span>
+              <div>
+                <h2>المظهر</h2>
+                <p>ألوان مستوحاة من terminalcolors.com وحجم خط واحد لكل الواجهة.</p>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="field">
+                <span class="field-label">لوحة الألوان</span>
+                <div id="appearGrid" class="appear-grid"></div>
+                <span class="field-hint">تُحفظ تلقائيًا وتظهر من أول تشغيل.</span>
+              </div>
+              <div class="field">
+                <div class="field-head">
+                  <label class="field-label" for="fontScale">حجم الخط</label>
+                  <span class="font-slider-val" id="fontScaleVal">متوسط</span>
+                </div>
+                <div class="font-slider-row">
+                  <input id="fontScale" type="range" min="0" max="2" step="1" value="1" aria-label="حجم الخط">
+                </div>
+                <span class="field-hint">صغير / متوسط / كبير — يغيّر كل نصوص الواجهة.</span>
+              </div>
             </div>
           </section>
         </div>

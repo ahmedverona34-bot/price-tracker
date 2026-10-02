@@ -142,6 +142,69 @@
     } catch (e) { return ""; }
   }
 
+  /* ------------------------------------------------------------------ *
+   * Appearance presets (terminal palettes) + font scale.
+   * ------------------------------------------------------------------ *
+   * Same two-place rule as theme: data-appearance / data-font-scale on
+   * <html> repaint from tokens.css, localStorage pre-paints the first
+   * frame, settings.json carries it via the backend. */
+  var APPEARANCES = [
+    { id: "default", label: "الافتراضي", sw: "#2563eb" },
+    { id: "dracula", label: "دراكولا", sw: "#bd93f9" },
+    { id: "nord", label: "نورد", sw: "#88c0d0" },
+    { id: "gruvbox", label: "جروفبوكس", sw: "#fabd2f" },
+    { id: "everforest", label: "إيفر فورست", sw: "#a7c080" },
+    { id: "rose-pine", label: "روز باين", sw: "#ebbcba" },
+    { id: "ayu", label: "آيو", sw: "#ff8f40" },
+    { id: "kanagawa", label: "كاناجاوا", sw: "#d27e99" }
+  ];
+  var FONT_SCALES = ["small", "medium", "large"];
+  var FONT_LABELS = { small: "صغير", medium: "متوسط", large: "كبير" };
+  var APPEAR_KEY = "pt-appearance";
+  var FONT_KEY = "pt-font-scale";
+
+  function applyAppearance(a) {
+    var ok = APPEARANCES.some(function (x) { return x.id === a; });
+    a = ok ? a : "default";
+    if (a === "default") document.documentElement.removeAttribute("data-appearance");
+    else document.documentElement.setAttribute("data-appearance", a);
+    try { localStorage.setItem(APPEAR_KEY, a); } catch (e) {}
+    var grid = $("appearGrid");
+    if (grid) Array.prototype.forEach.call(
+      grid.querySelectorAll("[data-appear]"), function (b) {
+        b.classList.toggle("active", b.dataset.appear === a);
+      });
+    return a;
+  }
+
+  function applyFontScale(s) {
+    if (FONT_SCALES.indexOf(s) < 0) s = "medium";
+    document.documentElement.setAttribute("data-font-scale", s);
+    try { localStorage.setItem(FONT_KEY, s); } catch (e) {}
+    var r = $("fontScale"), v = $("fontScaleVal");
+    if (r) r.value = String(FONT_SCALES.indexOf(s));
+    if (v) v.textContent = FONT_LABELS[s] || s;
+    return s;
+  }
+
+  function renderAppearGrid(current) {
+    var grid = $("appearGrid");
+    if (!grid) return;
+    setHTML(grid, APPEARANCES.map(function (x) {
+      return '<button class="appear-opt' + (x.id === current ? " active" : "")
+        + '" data-appear="' + x.id + '" type="button">'
+        + '<span class="appear-sw" style="background:' + x.sw + '"></span>'
+        + "<span>" + esc(x.label) + "</span></button>";
+    }).join(""));
+    Array.prototype.forEach.call(
+      grid.querySelectorAll("[data-appear]"), function (b) {
+        b.addEventListener("click", function () {
+          var next = applyAppearance(b.dataset.appear);
+          api("set_appearance", next);
+        });
+      });
+  }
+
   /* Circular theme reveal (View Transitions API).
    * Same idea as the viral light/dark clip-path demo: the new theme
    * expands as a circle from the toggle click point instead of swapping
@@ -530,6 +593,8 @@
       renderExclChips();
       renderRefreshSeg(s.refresh_sec == null ? 600 : s.refresh_sec);
       renderDefaultCols();
+      renderAppearGrid(applyAppearance(s.appearance || "default"));
+      applyFontScale(s.font_scale || "medium");
     });
   }
 
@@ -1592,6 +1657,8 @@
         // Theme first: the backend wins when it holds an explicit choice,
         // otherwise the local pre-paint value (or light) stays.
         if (s.theme === "dark" || s.theme === "light") applyTheme(s.theme);
+        renderAppearGrid(applyAppearance(s.appearance || "default"));
+        applyFontScale(s.font_scale || "medium");
         state.kind = s.kind || state.kind;
         state.minPrice = s.min_price || "";
         // saved_query is the last keyword the user searched. Pre-filling it
@@ -1621,9 +1688,26 @@
   function boot() {
     var local = readLocalTheme();
     if (local) applyTheme(local);
+    try {
+      var la = localStorage.getItem(APPEAR_KEY);
+      if (la) applyAppearance(la);
+      var lf = localStorage.getItem(FONT_KEY);
+      if (lf) applyFontScale(lf);
+    } catch (e) {}
+    renderAppearGrid(
+      document.documentElement.getAttribute("data-appearance") || "default");
     var themeBtn = $("themeBtn");
     if (themeBtn) themeBtn.addEventListener("click", function (e) {
       toggleThemeAnimated(e);
+    });
+    var fr = $("fontScale");
+    if (fr) fr.addEventListener("input", function () {
+      var s = FONT_SCALES[Number(fr.value)] || "medium";
+      applyFontScale(s);
+    });
+    if (fr) fr.addEventListener("change", function () {
+      var s = FONT_SCALES[Number(fr.value)] || "medium";
+      api("set_font_scale", s);
     });
     renderColMenu();
     apply();

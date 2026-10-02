@@ -179,6 +179,19 @@ KIND_ACCESSORIES = "إكسسوارات فقط"
 KIND_ALL = "الكل"
 KIND_CHOICES = (KIND_DEVICES, KIND_ACCESSORIES, KIND_ALL)
 
+# Appearance presets inspired by terminalcolors.com palettes. IDs are stable
+# (persisted in settings.json); labels are Arabic for the settings page.
+# Dark hex follow the official palettes: Dracula #282a36/#bd93f9,
+# Nord #2e3440/#88c0d0, Gruvbox #282828/#fabd2f, Everforest #2d353b/#a7c080,
+# Rose Pine #191724/#ebbcba, Ayu #0f1419/#ff8f40, Kanagawa #1f1f28/#d27e99.
+# Each id also has a light counterpart (Alucard #fffbeb, Everforest light
+# #fdf6e3, Rose Pine Dawn #faf4ed, Ayu light #fafafa, Kanagawa Lotus
+# #f2ecbc, Nord light derived from Snow Storm #eceff4), so the light/dark
+# toggle never clashes.
+APPEARANCES = ("default", "dracula", "nord", "gruvbox", "everforest",
+               "rose-pine", "ayu", "kanagawa")
+FONT_SCALES = ("small", "medium", "large")
+
 # How many product pages are opened at once when checking for coupons. Over
 # plain HTTP this is a small worker pool (capped, see load_sites) and it is
 # paced with a gap between batches, because a burst of parallel requests is
@@ -1556,6 +1569,12 @@ class TrackerCore:
         self.auto_refresh = self.settings.get("auto_refresh", True)
         _theme = self.settings.get("theme", "light")
         self.theme = _theme if _theme in ("light", "dark") else "light"
+        _appearance = self.settings.get("appearance", "default")
+        self.appearance = (_appearance if _appearance in APPEARANCES
+                           else "default")
+        _font_scale = self.settings.get("font_scale", "medium")
+        self.font_scale = (_font_scale if _font_scale in FONT_SCALES
+                           else "medium")
         self.searching = False
         self.search_gen = 0
         self.search_count = 0
@@ -1595,6 +1614,8 @@ class TrackerCore:
         return {"keyword": self.saved_query,
                 "kind": self.kind,
                 "theme": self.theme,
+                "appearance": self.appearance,
+                "font_scale": self.font_scale,
                 "auto_refresh": bool(self.auto_refresh),
                 "refresh_sec": self.refresh_every,
                 "exclude_words": self.settings.get("exclude_words",
@@ -1630,6 +1651,22 @@ class TrackerCore:
         """Light/dark choice from the topbar toggle; persisted like kind."""
         if theme in ("light", "dark"):
             self.theme = theme
+            self.save_settings()
+            return True
+        return False
+
+    def set_appearance(self, appearance):
+        """Terminal-palette preset id; persisted like theme."""
+        if appearance in APPEARANCES:
+            self.appearance = appearance
+            self.save_settings()
+            return True
+        return False
+
+    def set_font_scale(self, scale):
+        """ small | medium | large; persisted like theme."""
+        if scale in FONT_SCALES:
+            self.font_scale = scale
             self.save_settings()
             return True
         return False
@@ -2506,6 +2543,8 @@ class Api:
         cols = [c for c in cols if c in ALL_COLUMNS] or list(DEFAULT_COLUMNS)
         return {"kind": self._core.kind,
                 "theme": self._core.settings.get("theme", ""),
+                "appearance": self._core.settings.get("appearance", "default"),
+                "font_scale": self._core.settings.get("font_scale", "medium"),
                 "auto_refresh": bool(self._core.auto_refresh),
                 "refresh_sec": self._core.refresh_every,
                 "exclude_words": st.get("exclude_words", DEFAULT_EXCLUDE_WORDS),
@@ -2552,6 +2591,12 @@ class Api:
 
     def set_theme(self, theme):
         return {"ok": self._core.set_theme(theme or "")}
+
+    def set_appearance(self, appearance):
+        return {"ok": self._core.set_appearance(appearance or "")}
+
+    def set_font_scale(self, scale):
+        return {"ok": self._core.set_font_scale(scale or "")}
 
     def set_advanced(self, exclude_words, min_price):
         """Saves the advanced filters; the page picks up the new minimum."""
