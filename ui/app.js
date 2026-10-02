@@ -496,12 +496,59 @@
           p.classList.toggle("active", p.id === "page-" + btn.dataset.page);
         });
       if (btn.dataset.page === "sites") loadSites();
-      if (btn.dataset.page === "settings") {
-        loadSettings();
-        renderUpdateCard(updateInfo);   // the update card lives here
-      }
     });
   });
+
+  /* Topbar settings: glass menu + side panels (replaces the old page). */
+  (function settingsDropdown() {
+    var topBtn = $("settingsTopBtn"), menu = $("settingsMenu");
+    if (!topBtn || !menu) return;
+    var panels = Array.prototype.slice.call(
+      document.querySelectorAll(".glass-panel"));
+    var menuBtns = Array.prototype.slice.call(
+      menu.querySelectorAll("[data-panel]"));
+    function closeAll() {
+      menu.classList.add("hidden");
+      topBtn.classList.remove("active");
+      topBtn.setAttribute("aria-expanded", "false");
+      panels.forEach(function (p) { p.classList.add("hidden"); });
+      menuBtns.forEach(function (b) { b.classList.remove("active"); });
+    }
+    function openMenu() {
+      menu.classList.remove("hidden");
+      topBtn.classList.add("active");
+      topBtn.setAttribute("aria-expanded", "true");
+      loadSettings();
+      renderUpdateCard(updateInfo);
+    }
+    topBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (menu.classList.contains("hidden")) openMenu();
+      else closeAll();
+    });
+    menuBtns.forEach(function (b) {
+      b.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var panel = document.getElementById(b.dataset.panel);
+        var wasOpen = panel && !panel.classList.contains("hidden");
+        panels.forEach(function (p) { p.classList.add("hidden"); });
+        menuBtns.forEach(function (x) { x.classList.remove("active"); });
+        if (panel && !wasOpen) {
+          panel.classList.remove("hidden");
+          b.classList.add("active");
+          loadSettings();
+          renderUpdateCard(updateInfo);
+        }
+      });
+    });
+    document.addEventListener("click", function (e) {
+      var wrap = topBtn.closest(".topbar-settings-wrap");
+      if (wrap && !wrap.contains(e.target)) closeAll();
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") closeAll();
+    });
+  })();
 
   function exclWords() {
     return ($("excludeBox").value || "").split(",")
