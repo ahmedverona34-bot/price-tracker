@@ -61,7 +61,9 @@
    Project glue — positioning + theme tokens only.
    =========================================================================== */
 
-/* Light theme glow follows the light secondary token (#16a34a). */
+/* Default light-theme discount glow, following the light secondary token
+   (#16a34a). The appearance presets carry their own --accent-rgb in
+   tokens.css, so this only covers appearance = default. */
 [data-theme="light"] { --accent-rgb: 22, 163, 74; }
 
 /* Ping-ring wrapper: relatively positioned, sized by the dot it holds; the
