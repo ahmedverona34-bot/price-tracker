@@ -852,6 +852,91 @@
   });
 
   /* ------------------------------------------------------------------ *
+   * Adding a store by its URL
+   * ------------------------------------------------------------------ */
+  /* The probe walks search-URL patterns and parses candidates on a worker
+     thread, so it can take several seconds of real network work. Polling is
+     the same shape the search already uses: kick off, then read status. The
+     tick stops on any terminal state so a finished probe costs nothing. */
+  var addPoll = null;
+
+  function setAddMsg(text, kind) {
+    var el = $("addStoreMsg");
+    el.textContent = text || "";
+    el.className = "add-store-msg" + (kind ? " is-" + kind : "");
+    el.hidden = !text;
+  }
+
+  function setAddBusy(busy) {
+    $("addStoreBtn").disabled = busy;
+    $("addStoreCancelBtn").hidden = !busy;
+    $("addStoreUrl").disabled = busy;
+  }
+
+  function runAddStore() {
+    var url = ($("addStoreUrl").value || "").trim();
+    if (!url) {
+      setAddMsg("اكتب رابط المتجر أولًا.", "error");
+      return;
+    }
+    setAddBusy(true);
+    setAddMsg("جاري فحص الموقع…");
+    api("add_store", url).then(function (res) {
+      if (res && res.started === false) {
+        setAddBusy(false);
+        setAddMsg((res && res.message) || "تعذّر بدء الفحص.", "error");
+        return;
+      }
+      tickAddStore();
+    });
+  }
+
+  function tickAddStore() {
+    api("add_store_status").then(function (st) {
+      if (!st) return;
+      if (st.state === "running") {
+        setAddMsg(st.message || "جاري فحص الموقع…");
+        addPoll = setTimeout(tickAddStore, 900);
+        return;
+      }
+      clearTimeout(addPoll);
+      addPoll = null;
+      setAddBusy(false);
+      var ok = st.state === "ok";
+      setAddMsg(st.message || "", ok ? "ok" : "error");
+      if (ok) {
+        $("addStoreUrl").value = "";
+        // The table and the KPI tiles both come from get_sites, and the
+        // new store is in it already, so one reload covers the whole page.
+        loadSites();
+      }
+    });
+  }
+
+  $("addStoreBtn").addEventListener("click", runAddStore);
+  $("addStoreCancelBtn").addEventListener("click", function () {
+    api("cancel_add_store").then(function () {
+      // Stop polling locally too: the worker checks the flag between steps, so
+      // a cancel can land after the current request finishes rather than at
+      // once, and the message below is replaced when the state settles.
+      if (addPoll) {
+        clearTimeout(addPoll);
+        addPoll = null;
+      }
+      setAddBusy(false);
+      setAddMsg("جاري الإلغاء…");
+    });
+  });
+  /* Enter submits: the field is the only control on the panel, and the audience
+     types a URL and presses Enter. */
+  $("addStoreUrl").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      runAddStore();
+    }
+  });
+
+  /* ------------------------------------------------------------------ *
    * Search
    * ------------------------------------------------------------------ */
   function showSearching() {

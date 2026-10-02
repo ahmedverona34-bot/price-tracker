@@ -247,6 +247,24 @@ try {
 
         <div class="kpi-grid" id="siteStats" aria-label="حالة المصادر"></div>
 
+        <section class="extract add-store">
+          <div class="extract-row">
+            <div class="mini-search">
+              <input id="addStoreUrl" type="text" dir="ltr"
+                     placeholder="example.com"
+                     aria-label="رابط متجر جديد"
+                     autocomplete="off" spellcheck="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+            </div>
+            <button id="addStoreBtn" class="btn-primary">إضافة متجر</button>
+            <button id="addStoreCancelBtn" class="btn-outline sm hidden">إلغاء</button>
+          </div>
+          <!-- Progress lives here rather than in a modal: the probe takes a few
+               seconds of real network work, and a dialog over the page would
+               hide the stores table the user is adding to. -->
+          <p id="addStoreMsg" class="add-store-msg" role="status" aria-live="polite" hidden></p>
+        </section>
+
         <section class="extract">
           <div class="sites-search">
             <div class="mini-search">

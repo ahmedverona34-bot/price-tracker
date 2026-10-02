@@ -30,6 +30,7 @@ import webbrowser
 from datetime import datetime
 from urllib.parse import quote_plus
 from urllib.parse import urljoin
+from urllib.parse import urlparse
 
 import requests
 import requests.adapters
@@ -222,6 +223,14 @@ DEFAULT_EXCLUDE_WORDS = (
 
 _AR_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
 
+# Arabic decimal punctuation, which is not ASCII and so is invisible to the
+# digit regex below. 2B's Arabic pages write a price as "٦٧٬٧٩٩ ج.م." with
+# U+066C ARABIC THOUSANDS SEPARATOR and U+066B ARABIC DECIMAL SEPARATOR, and
+# without folding these the match stops at the first digit group: that reads as
+# 67.0 instead of 67799.0 - a price wrong by a factor of a thousand, with no
+# error anywhere to notice it.
+_AR_SEPARATORS = str.maketrans("٫٬", ".,")
+
 # Last Playwright browser channel that worked ("msedge"/"chrome"/"chromium").
 LAST_BROWSER_CHANNEL = None
 
@@ -347,6 +356,10 @@ def fmt_price(v):
 
 
 def parse_price(text):
+    # Both folds have to happen before the match: Arabic-Indic digits and the
+    # Arabic thousands/decimal separators together, or the number is read as
+    # its first two digits.
+    text = (text or "").translate(_AR_DIGITS).translate(_AR_SEPARATORS)
     text = text.replace("\xa0", " ")
     m = re.search(r"\d[\d,\.\s]*", text)
     if not m:
@@ -1429,6 +1442,825 @@ def load_sites():
         return [], "ملف sites.json غير صالح (ليست بيانات JSON سليمة). يُرجى مراجعة الملف والمحاولة مرة أخرى."
 
 
+# ---------------------------------------------------------------------------
+# Adding a store from its URL
+# ---------------------------------------------------------------------------
+# The Sources page can add a shop the user has never configured: they paste the
+# store's link and the app works out how to read it. Two things have to be
+# guessed from the page itself - the search URL and the per-card selectors -
+# and both guesses are checked against real HTML before anything is written to
+# sites.json. A store that will not serve its results at all (a bot checkpoint,
+# or a listing that only exists after JavaScript runs) is reported in plain
+# Arabic rather than retried, for the reason fetch_html already documents:
+# asking a store that has blocked you again only deepens the block.
+
+# A word nearly every phone shop stocks, so "does this search URL work?" can be
+# answered by whether the page it produces lists anything at all.
+_PROBE_QUERY = "iphone"
+
+# Search URLs to try, conventional first. _MAX_SEARCH_PROBES is the cap on how
+# many times the probe touches the store: each one is a real request against
+# someone's server, so the list is short and its order matters more than its
+# length. Two stores already in sites.json use `?q=` (2B Egypt) and `?q=` with
+# `?page=` (Dubai Phone), which is why `?q=` leads.
+_SEARCH_URL_PATTERNS = (
+    "?q={q}",
+    "/search?q={q}",
+    "?search={q}",
+    "?s={q}",
+    "/search/{q}",
+    # Magento is what 2B Egypt runs (its own path is
+    # /en/catalogsearch/result/?q=) and WooCommerce is the other platform
+    # common among local shops; both are one guess away from the ?q= above.
+    "/catalogsearch/result/?q={q}",
+    "?post_type=product&s={q}",
+    "?keyword={q}",
+    "?query={q}",
+    "?search_query={q}",
+    "?text={q}",
+    "?find={q}",
+    "?searchkey={q}",
+    "?term={q}",
+)
+_MAX_SEARCH_PROBES = 6
+
+# How many ranked card sets to try against the one page that did answer. This
+# is the "keep going until it parses" loop and it is bounded on purpose: it
+# walks candidates for the HTML already in hand, it never re-requests the store
+# hoping the block lifts. The cost is parsing a page already fetched, so this
+# bound is about picking a clear winner rather than about being polite - the
+# request budget is _MAX_SEARCH_PROBES.
+_MAX_SELECTOR_TRIES = 8
+
+# Fewer repeats than this is a banner or a promo strip, not a product listing.
+_MIN_CARDS = 3
+
+# Tags that are never a product card but do repeat all over a shop page, so
+# they are skipped when a card set is being guessed.
+_NEVER_CARD = {"html", "head", "body", "script", "style", "nav", "header",
+               "footer", "form", "option", "svg", "path", "noscript", "iframe"}
+
+# A class has to be usable in a selector verbatim; storefronts emit hashed or
+# colon-separated names that soupsieve cannot take unescaped.
+_CLASS_OK = re.compile(r"^[A-Za-z_][A-Za-z0-9_\-]*$")
+
+# Class fragments that name a price, used to rank a card's inner elements.
+_PRICE_HINT = ("price", "cost", "amount", "sekkah", "sar", "egp", "total")
+_TITLE_HINT = ("title", "name", "heading", "product-name")
+
+# Class fragments that name the block itself. A class carrying one of these is
+# the one worth keeping in a stored selector; the rest are utility classes
+# (flex, w-full, border-solid) that a redesign reorders for no reason.
+_CARD_HINT = ("product", "card", "item", "tile", "result", "listing",
+              "offer", "entry")
+
+
+def _sig_selectors(sig):
+    """CSS selectors for a signature, narrowest-that-is-still-meaningful first.
+
+    A generated selector is written into sites.json, which the README calls out
+    as the file a user edits to add a store by hand. So the selector has to be
+    readable and has to survive a later redesign. Dubai Phone's real card
+    carries eleven classes and the guesser can technically name all of them,
+    but `article.nf-product-card` is what a person would have written, and it
+    still matches after the site drops `cursor-pointer` from the card.
+    """
+    name, classes = sig
+    usable = [c for c in classes if _CLASS_OK.match(c)]
+    if classes and not usable:
+        return []
+    if not usable:
+        # A block with no class at all can only be named by its tag.
+        return [name]
+    semantic = [c for c in usable if any(h in c.lower() for h in _CARD_HINT)]
+    # Longest first: "product-item" narrows further than "item", and it is the
+    # one that stays true when a site also puts "item" on unrelated rows.
+    out = ["%s.%s" % (name, c) for c in sorted(semantic, key=len, reverse=True)[:2]]
+    if len(usable) <= 3:
+        out.append("%s.%s" % (name, ".".join(usable)))
+    else:
+        out.append("%s.%s" % (
+            name, ".".join(sorted(usable, key=len, reverse=True)[:2])))
+    out.append("%s.%s" % (name, ".".join(usable)))
+    seen, ordered = set(), []
+    for s in out:
+        if s not in seen:
+            seen.add(s)
+            ordered.append(s)
+    return ordered
+
+
+def _sig_selector(sig):
+    """The one selector to use for a signature: the narrowest readable one."""
+    options = _sig_selectors(sig)
+    return options[0] if options else None
+
+# Three or more digits in a row, with thousands separators allowed: the shape of
+# a phone price, and a poor match for a year or a review count.
+_NUMERIC = re.compile(r"\d[\d,  .]{2,}")
+
+
+def normalize_store_url(raw):
+    """The pasted link as a plain http(s) base URL, or None if it cannot be one.
+
+    Everything after the host is dropped: this returns the address the search
+    URL patterns are hung off, not a page of the store.
+    """
+    u = (raw or "").strip().strip('"').strip("'").strip()
+    if not u:
+        return None
+    if not re.match(r"^[A-Za-z][A-Za-z0-9+.\-]*://", u):
+        # Bare "store.com/..." is what people actually paste; https first so a
+        # store that has no plain http gets a plain "works" instead of a
+        # redirect the probe would have to follow to notice.
+        u = "https://" + u
+    try:
+        p = urlparse(u)
+    except ValueError:
+        return None
+    if p.scheme not in ("http", "https") or not p.hostname:
+        return None
+    if "." not in p.hostname and p.hostname != "localhost":
+        # Not a store address. Refusing here keeps the probe from being aimed
+        # at whatever single-label host the machine happens to resolve.
+        return None
+    # The path is kept exactly as written, trailing slash included: Magento
+    # routes on that slash (2B's /en/catalogsearch/result/ 404s without it), and
+    # someone who pasted a working search URL has already handed us the part
+    # that is hard to guess.
+    return "%s://%s%s" % (p.scheme, p.netloc, p.path or "")
+
+
+def _join(base, pattern):
+    """Attach a search pattern to a base URL.
+
+    A pattern starting with `?` is appended as-is so the base keeps the slash
+    the store may route on. A pattern starting with `/` brings its own, so any
+    trailing slash on the base is dropped first and the two never double up.
+    """
+    if pattern.startswith("?"):
+        return base + pattern
+    return base.rstrip("/") + pattern
+
+
+def _sig(el):
+    """(tag, classes) identity used to recognise the same block twice."""
+    return (el.name, tuple(sorted(el.get("class") or [])))
+
+
+def _sig_selector(sig):
+    """CSS selector for a signature, or None when its classes cannot be typed."""
+    name, classes = sig
+    usable = [c for c in classes if _CLASS_OK.match(c)]
+    if classes and not usable:
+        return None
+    return name + "".join("." + c for c in usable)
+
+
+def _looks_pricey(el):
+    """Whether this element's text is shaped like a price."""
+    cls = " ".join(el.get("class") or []).lower()
+    if any(h in cls for h in _PRICE_HINT):
+        return bool(_NUMERIC.search(el.get_text(" ", strip=True)))
+    if el.get("data-price") is not None or el.get("itemprop") == "price":
+        return True
+    text = el.get_text(" ", strip=True)
+    return bool(_NUMERIC.search(text)) and len(text) < 40
+
+
+def _card_link(card):
+    """The card's product link, or "" when it has none worth following.
+
+    Looks at the card's own anchors first, then at a wrapping anchor. That
+    second case is not a rarity: Dubai Phone renders `<a href="/shop/...">`
+    around each `<article class="nf-product-card">`, so the card element itself
+    contains no link at all. _parse_cards already falls back to the parent
+    anchor for exactly this markup, and a guesser that cannot see it scores
+    that card as valueless and throws away a perfect listing.
+    """
+    for a in card.find_all("a", href=True):
+        href = _usable_href(a)
+        if href:
+            return href
+    parent_a = card.find_parent("a", href=True)
+    if parent_a is not None:
+        return _usable_href(parent_a)
+    return ""
+
+
+def _card_signature_groups(soup):
+    """Every repeated block of markup on the page, as (sig, [elements]).
+
+    A product listing is the only part of a shop page where one structure shows
+    up several times side by side, so a signature appearing _MIN_CARDS times is
+    the starting point. Groups that nest inside their own kind are dropped: a
+    wrapper around the grid matches the same selector as the cards inside it and
+    would parse into one row per product instead of one row per listing.
+    """
+    groups = {}
+    for el in soup.find_all(True):
+        if el.name in _NEVER_CARD:
+            continue
+        groups.setdefault(_sig(el), []).append(el)
+    out = []
+    for sig, els in groups.items():
+        if len(els) < _MIN_CARDS:
+            continue
+        if _sig_selector(sig) is None:
+            continue
+        # Nested: at least one of these elements contains another of the same
+        # kind, so the selector is pointing at a wrapper.
+        if any(other is not el for el in els for other in el.find_all(True)
+               if _sig(other) == sig):
+            continue
+        out.append((sig, els))
+    return out
+
+
+def rank_card_selectors(soup, limit=_MAX_SELECTOR_TRIES):
+    """Candidate `item` selectors, best first.
+
+    Ranked on how many of the repeating blocks carry both a price and a
+    product link, which is what tells a listing apart from a nav bar, a
+    footer, or a carousel of promo banners - all of which repeat just as often.
+
+    Two filters keep the list short enough that _MAX_SELECTOR_TRIES still
+    covers a real listing. A block has to be *mostly* cards, or `div` wins on
+    raw count by matching half the page; and a selector with no class in it is
+    demoted hard, because `div` keeps matching every card until the site is
+    redesigned and then quietly stops being right.
+    """
+    scored = []
+    for sig, els in _card_signature_groups(soup):
+        # Walk the group's selectors narrowest-first and keep the first that
+        # still explains enough of the page. `article.nf-product-card` beats the
+        # eleven-class version that names the same 16 elements, and both are
+        # tried so a class that turned out to be too generic simply falls
+        # through to the next.
+        for sel in _sig_selectors(sig):
+            try:
+                cards = soup.select(sel)
+            except Exception:
+                continue
+            if len(cards) < _MIN_CARDS:
+                continue
+            good = sum(1 for c in cards
+                       if _card_link(c) and any(_looks_pricey(d)
+                                                for d in c.find_all(True)))
+            if not good or good < _MIN_CARDS:
+                continue
+            if good / float(len(cards)) < 0.35:
+                # Matches far more than it explains: a wrapper, or a bare tag
+                # catching the page as well as the listing.
+                break
+            named = 1.0 + 0.15 * min(len(sig[1]), 3)
+            if not sig[1]:
+                named = 0.6
+            # <article> and <li> are what a listing is almost always made of,
+            # so they win a tie against a <div> that happens to score the same.
+            if sig[0] in ("article", "li"):
+                named += 0.2
+            scored.append((good * named, sel))
+            break  # the narrowest selector for this group is the one stored
+    scored.sort(key=lambda t: -t[0])
+    seen, out = set(), []
+    for _score, sel in scored:
+        if sel in seen:
+            continue
+        seen.add(sel)
+        out.append(sel)
+    return out[:limit]
+
+
+# A class fragment naming the price the customer actually pays. "price" itself
+# is deliberately absent: it is in _PRICE_HINT, and here it would match both
+# sides of a pair, at which point the shorter spelling wins and the compare-at
+# gets read as the price now.
+_NOW_HINT = ("special", "now-price", "nowprice", "sale-price", "final-price",
+             "current-price", "discount-price")
+# ...and one naming the price it replaced.
+_OLD_HINT = ("old", "was", "regular", "compare", "before", "list", "rrp",
+             "struck", "del")
+
+
+def _is_price_leaf(el):
+    """Whether this element holds exactly one price and wraps no other.
+
+    The single most important rule in this guesser. A Magento price block is
+    `<span class="price-container price-final_price"><span class="old-price"><span class="price">95,999</span></span><span class="special-price"><span class="price">69,999</span></span></span>`,
+    so the outer element is pricey and holds two numbers - and parse_price
+    takes the first, which is always the higher, struck-through one. Guessing
+    that container yields the pre-discount price for every product with no
+    visible error. Only a leaf can be read as one price.
+    """
+    if not _looks_pricey(el):
+        return False
+    for d in el.find_all(True):
+        if d is not el and _looks_pricey(d):
+            return False
+    return True
+
+
+def _price_path(card, el, siblings):
+    """A selector reaching this one price and not the others on the card.
+
+    Two prices on one card can be the same tag carrying the same classes: 2B
+    renders the compare-at and the current price as `span.price` in both
+    cases, inside the same `.price-wrapper`, under the same
+    `.price-final_price`. Nothing about the element or its ancestry reads as
+    "old" except the `.old-price` wrapper, and climbing cannot find it by name
+    because every ancestor in between looks identical for both prices.
+
+    So the criterion is not "which ancestor sounds like a price" but "which
+    ancestor separates this element from the other price". The first ancestor
+    where the card's selector resolves to exactly one of the price elements is
+    the one that names which price this is, and `.old-price span.price` /
+    `.special-price span.price` fall out of it directly. Left unqualified, the
+    selector matches both and takes the first, which is always the higher -
+    every discounted product silently reporting its pre-discount price.
+    """
+    own = _sig_selector(_sig(el))
+    if not own:
+        return ""
+    others = [o for o in siblings if o is not el]
+    node = el.parent
+    while node is not None and node.name not in _NEVER_CARD:
+        for cand in _sig_selectors(_sig(node)):
+            if "." not in cand:
+                continue
+            path = "%s %s" % (cand, own)
+            try:
+                hit = card.select_one(path)
+            except Exception:
+                continue
+            # Separates this price from every other one on the card.
+            if hit is el and not any(other in card.select(path)
+                                     for other in others):
+                return path
+        node = node.parent
+    return own
+
+
+def _price_groups(cards, min_ratio=0.5):
+    """Every repeated single-price element inside the cards, with its median.
+
+    The median is what tells current from compare-at without trusting class
+    names: on a discounted listing the current price is the lower of the two.
+    """
+    counts = {}
+    for card in cards:
+        leaves = [el for el in card.find_all(True) if _is_price_leaf(el)]
+        local = set()
+        for el in leaves:
+            s = _price_path(card, el, leaves)
+            if s:
+                local.add(s)
+        for s in local:
+            counts[s] = counts.get(s, 0) + 1
+    need = max(1, int(len(cards) * min_ratio))
+    groups = []
+    for s, n in counts.items():
+        if n < need:
+            continue
+        vals = []
+        for card in cards:
+            el = card.select_one(s)
+            if el is None:
+                continue
+            v = parse_price(el.get_text(" ", strip=True))
+            if v and v > 0:
+                vals.append(v)
+        if not vals:
+            continue
+        groups.append({"sel": s, "count": n, "median": statistics.median(vals)})
+    return groups
+
+
+def _pick_prices(cards):
+    """(price_now, price_old) selectors for these cards.
+
+    Class names decide it when they say so, and the price values decide it when
+    they do not: with two price elements on every card the lower one is what
+    the customer pays. Emptiness is a legitimate answer - a store with one
+    price per product has no compare-at, and inventing one out of a rating or
+    an instalment figure is worse than leaving it out.
+    """
+    groups = _price_groups(cards)
+    if not groups:
+        return "", ""
+
+    def named(hints, used):
+        # Most repeated first, then the shortest spelling, so `.price` beats
+        # `.price-wrapper .price` when a card has both.
+        cands = [g for g in groups if g["sel"] not in used]
+        cands.sort(key=lambda g: (-g["count"], len(g["sel"])))
+        for g in cands:
+            if any(h in g["sel"].lower() for h in hints):
+                return g
+        return None
+
+    # Class names decide it when they say so: on 2B the two price selectors are
+    # `.old-price span.price` and `.special-price span.price`, and "old" belongs
+    # to the compare-at, not to the price now. Matching on the whole selector
+    # string rather than on the element's own class is what keeps "old" from
+    # being read as part of "price_old".
+    now = named(_NOW_HINT, ())
+    old = named(_OLD_HINT, (now["sel"],) if now else ())
+    if now is not None and old is not None and now["sel"] != old["sel"]:
+        return now["sel"], old["sel"]
+    if now is not None:
+        # One hinted price and nothing else: a store with a single price.
+        rest = [g for g in groups if g["sel"] != now["sel"]]
+        if not rest:
+            return now["sel"], ""
+        other = min(rest, key=lambda g: g["count"])
+        return now["sel"], other["sel"] if other["count"] >= _MIN_CARDS else ""
+    if len(groups) == 1:
+        return groups[0]["sel"], ""
+    # No names to go on, so fall back on the numbers: current is the lower.
+    ordered = sorted(groups, key=lambda g: g["median"])
+    now, old = ordered[0], ordered[-1]
+    return now["sel"], (old["sel"] if old["sel"] != now["sel"] else "")
+
+
+def _usable_href(el):
+    """The element's href, or "" when it is not a link to a product.
+
+    Every card carries wishlist and compare buttons, and on 2B those are bare
+    `<a href="#">`. Counting one as the card's link makes the guesser settle on
+    `a`, which then resolves to the wishlist button in every card and leaves
+    the whole listing sharing a single link.
+    """
+    if el.name != "a":
+        return ""
+    href = (el.get("href") or "").strip()
+    if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+        return ""
+    return href
+
+
+def _common_descendant(cards, predicate, min_ratio=0.5, hints=()):
+    """The most repeated inner signature of `cards` that satisfies predicate.
+
+    Returns a CSS selector. "Most repeated" is what makes this stable: a card's
+    price is the one element of that kind in nearly every card, while a
+    one-off label or an icon appears in a single card and is never chosen.
+
+    Ties go to a class name matching `hints`, then to the selector naming the
+    most classes. Preferring the *shortest* selector is the obvious-looking
+    rule and it is backwards: on a 2B card both `span` and `span.price` hold
+    the price in all 44 cards, and plain `span` also swallows the rating and
+    the stock line. The narrow one is the right guess; the short one is the
+    guess that quietly collects the wrong number.
+    """
+    counts = {}
+    for card in cards:
+        local = set()
+        for el in card.find_all(True):
+            if predicate(el):
+                s = _sig_selector(_sig(el))
+                if s:
+                    local.add(s)
+        for s in local:
+            counts[s] = counts.get(s, 0) + 1
+    need = max(1, int(len(cards) * min_ratio))
+    best = [s for s, n in counts.items() if n >= need]
+    if not best:
+        return ""
+
+    def rank(sel):
+        classes = sel.split(".", 1)[1] if "." in sel else ""
+        hinted = 1 if hints and any(h in classes.lower() for h in hints) else 0
+        named = classes.count(".") + 1 if classes else 0
+        return (-counts[sel], -hinted, -named, len(sel))
+
+    return min(best, key=rank)
+
+
+def describe_cards(soup, item_sel):
+    """Turn a chosen `item` selector into a full site definition."""
+    cards = soup.select(item_sel)
+    if not cards:
+        return None
+
+    def heady(el):
+        cls = " ".join(el.get("class") or []).lower()
+        return (el.name in ("h1", "h2", "h3", "h4", "h5")
+                or any(h in cls for h in _TITLE_HINT)) and bool(el.get_text(strip=True))
+
+    def anchored(el):
+        return bool(_usable_href(el))
+
+    def titled_anchor(el):
+        return bool(_usable_href(el)) and bool(el.get_text(strip=True))
+
+    # Prices come from the leaf-price pass rather than _common_descendant: a
+    # container holding both prices would read as the higher one. See
+    # _is_price_leaf for why that failure is silent.
+    price_now, price_old = _pick_prices(cards)
+    title = (_common_descendant(cards, heady, hints=_TITLE_HINT)
+             or _common_descendant(cards, titled_anchor))
+    link = _common_descendant(cards, anchored) or ""
+    # One `img` is enough: the cards were already proven to repeat, and a
+    # storefront rarely varies the image selector between cards.
+    image = "img" if any(c.find("img") for c in cards) else ""
+    return {"item": item_sel,
+            "title": title,
+            "price_now": price_now,
+            "price_old": price_old,
+            "link": link or item_sel,
+            "image": image}
+
+
+def _score_parsed(rows, host):
+    """How much a candidate parse can be trusted, higher is better.
+
+    Rows are the real test: _parse_cards already drops anything without a
+    usable price, so what is left is what the app would actually show.
+
+    Counted over *distinct* links, not raw rows. A selector that catches both
+    a card and a wrapper inside it returns every product twice, and that
+    duplicate is not a second product - letting it raise the score is how a
+    too-broad selector beats the right one.
+    """
+    if not rows:
+        return 0.0
+    links = [r["link"] for r in rows if r.get("link")]
+    distinct = len(set(links))
+    on_host = sum(1 for l in links if host in l)
+    titled = sum(1 for r in rows if r.get("title") and r["title"] != "(no title)")
+    sane = sum(1 for r in rows
+               if (r.get("after") or 0) > 0 and r["before"] >= r["after"])
+    # 6.0 is a perfect row: its own distinct link, on this host, titled, and
+    # with a price that adds up.
+    return (distinct * 1.0 + on_host * 1.5 + titled * 1.5 + sane * 2.0)
+
+
+def _is_listing(rows):
+    """Whether these rows are a product listing worth writing to sites.json.
+
+    Deliberately strict. A store that gets added with a wrong price selector
+    will keep returning wrong prices for as long as it stays in the file, and
+    the user has no way to tell a wrong price from a real discount.
+    """
+    if len(rows) < _MIN_CARDS:
+        return False
+    distinct = len({r["link"] for r in rows if r.get("link")})
+    if distinct < _MIN_CARDS:
+        # Every row the same link: the selector matched one container, or one
+        # product, over and over.
+        return False
+    sane = sum(1 for r in rows
+               if (r.get("after") or 0) > 0 and r["before"] >= r["after"])
+    titled = sum(1 for r in rows
+                 if r.get("title") and r["title"] != "(no title)")
+    return (sane >= len(rows) * 0.8
+            and titled >= len(rows) * 0.8
+            and distinct >= len(rows) * 0.8)
+
+
+def _parse_candidate(cand, html, final_url):
+    """Parse a candidate, then repair the guess that produced bad rows.
+
+    A compare-at price has to be at least the current price. When the guessed
+    `price_old` selector latches onto something else that merely looks numeric
+    - a star rating, a review count, an instalment figure - every row comes
+    back with before < after or before == 0, and a bogus 0% or 200% discount
+    is worse than having no old price at all. Dropping the guess and parsing
+    again leaves a correct single-price store, which is what the page says.
+    """
+    rows = _parse_cards(cand, html, final_url)
+    if rows and cand.get("price_old"):
+        broken = any(r["before"] <= 0 or r["before"] < r["after"] for r in rows)
+        if broken:
+            logging.info("dropping guessed price_old %r: it does not read as a "
+                         "compare-at price", cand["price_old"])
+            cand = dict(cand, price_old="")
+            rows = _parse_cards(cand, html, final_url)
+    return cand, rows
+
+
+def _trial_site(name, base, pattern, item_sel, detail):
+    """A sites.json entry for one candidate, ready to hand to _parse_cards."""
+    site = {"name": name, "search_url": _join(base, pattern),
+            "item": item_sel}
+    site.update(detail or {})
+    return site
+
+
+def _probe_page(html, final_url, base, pattern, name, host):
+    """Try every ranked card set on this page, return (site, rows, score, tried).
+
+    This is the loop that repairs our own guess: the page already arrived, so
+    nothing is re-requested and the store is not touched again. Each candidate
+    goes through _parse_cards exactly as a search would, and the best-scoring
+    listing wins.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    best = None
+    tried = 0
+    for item_sel in rank_card_selectors(soup):
+        detail = describe_cards(soup, item_sel)
+        if not detail:
+            continue
+        cand = _trial_site(name, base, pattern, item_sel, detail)
+        if not cand.get("price_now") or not cand.get("title"):
+            # Nothing to read a price or a name from; a further candidate is
+            # strictly more likely to work than finishing this one.
+            continue
+        try:
+            cand, rows = _parse_candidate(cand, html, final_url)
+        except Exception:
+            logging.exception("candidate parse failed for %s", item_sel)
+            continue
+        tried += 1
+        score = _score_parsed(rows, host)
+        if score and (best is None or score > best[2]):
+            best = (cand, rows, score)
+        # 4.5 of the 6.0 a perfect row scores: nearly every row brought its own
+        # distinct link on this host, a title and arithmetic that adds up.
+        if score >= 4.5 * max(1, len(rows)):
+            break
+    if best:
+        return best[0], best[1], best[2], tried
+    return None, [], 0.0, tried
+
+
+def _responds_to_keyword(base, pattern, name, host, real_count):
+    """Whether this address actually changes when the keyword changes.
+
+    This one request is what keeps a broken guess out of sites.json. A page can
+    list plenty of products and still ignore the keyword entirely - it was the
+    front page, or a category, or a param the store does not read - and such a
+    store would sit in the list looking perfectly healthy while returning the
+    same products for every search the user ever runs.
+
+    Compared as a ratio rather than "zero results", because a store that shows
+    recommendations when a search finds nothing is still a working search.
+    """
+    nonsense = "zzqqxx%d" % (int(time.time()) % 1000000)
+    url = _join(base, pattern).replace("{q}", quote_plus(nonsense))
+    try:
+        html, final_url = fetch_html(url, site_key="discover")
+    except Exception:
+        # An address that cannot even be read for a nonsense word is not a
+        # search address.
+        logging.info("nonsense probe failed for %s", url)
+        return False
+    if not html or looks_like_checkpoint(html):
+        return False
+    try:
+        _site, rows, _score, _t = _probe_page(
+            html, final_url, base, pattern, name, host)
+    except Exception:
+        logging.exception("nonsense probe parse failed for %s", url)
+        return False
+    distinct = len({r["link"] for r in rows if r.get("link")})
+    return distinct < max(1, int(real_count * 0.4))
+
+
+def guess_search_url(base, name, host, progress=None, sleep=time.sleep):
+    """Find the URL on this store that lists search results for a keyword.
+
+    Only addresses carrying `{q}` are eligible. A shop's front page lists
+    products too, and accepting one would look like success while answering
+    every future search with the same page, so the front page is never a
+    candidate.
+
+    Returns (pattern, html, final_url, site, rows) for the first page that
+    answers with a real listing that also responds to the keyword, or
+    (None, ...) once the request budget is spent.
+    """
+    tried = []
+    patterns = list(_SEARCH_URL_PATTERNS[:_MAX_SEARCH_PROBES])
+    for i, pattern in enumerate(patterns):
+        if progress:
+            progress("جاري البحث عن صفحة النتائج… (%d/%d)"
+                     % (i + 1, len(patterns)))
+        url = _join(base, pattern).replace("{q}", quote_plus(_PROBE_QUERY))
+        try:
+            html, final_url = fetch_html(url, site_key="discover")
+        except CheckpointError:
+            raise
+        except Exception as e:
+            logging.info("search url probe failed for %s: %s", url, e)
+            tried.append(pattern)
+            continue
+        if html and looks_like_checkpoint(html):
+            raise CheckpointError("checkpoint on %s" % url)
+        site, rows, _score, _t = _probe_page(html, final_url, base, pattern,
+                                             name, host)
+        if _is_listing(rows):
+            if _responds_to_keyword(base, pattern, name, host, len(rows)):
+                return pattern, html, final_url, site, rows
+            logging.info("%s answered but ignored the keyword: %s",
+                         base, pattern)
+        tried.append(pattern)
+        # Each attempt is a real request against the store's server.
+        sleep(random.uniform(0.6, 1.4))
+    logging.info("no usable result page on %s; tried %s", base, tried)
+    return None, "", "", None, []
+
+
+def probe_store(raw_url, progress=None):
+    """Decide whether a pasted link can be read, and return the site to add.
+
+    Never raises: every failure comes back as {"ok": False, "message": ...} in
+    plain Arabic, because the person using this does not read English and
+    cannot tell a blocked store from a broken one.
+    """
+    base = normalize_store_url(raw_url)
+    if not base:
+        return {"ok": False, "stage": "url",
+                "message": "الرابط غير صالح. اكتب رابط المتجر كاملًا، "
+                           "مثل example.com"}
+    host = urlparse(base).netloc
+    name = host.split(":")[0].replace("www.", "") or host
+    if progress:
+        progress("جاري فتح %s…" % host)
+    try:
+        pattern, html, final_url, site, rows = guess_search_url(
+            base, name, host, progress)
+    except CheckpointError:
+        # The store answered with a protection wall instead of its results.
+        # Retrying is what makes a block worse, so this stops here.
+        logging.info("store %s served a bot checkpoint", host)
+        return {"ok": False, "stage": "blocked",
+                "message": "الموقع %s يحجب الاستخراج الآلي، "
+                           "لذلك لا يمكن إضافة هذا المتجر." % name}
+    except Exception as e:
+        logging.exception("probe failed for %s", base)
+        return {"ok": False, "stage": "network",
+                "message": "تعذّر الوصول إلى %s. تأكد من الرابط." % name}
+    if not site:
+        return {"ok": False, "stage": "nolist",
+                "message": "لم يتم العثور على صفحة نتائج في %s. "
+                           "قد تكون النتائج تظهر بعد تشغيل جافاسكريبت، "
+                           "وهذا البرنامج يقرأ النتائج الظاهرة في الصفحة فقط."
+                           % name}
+    entry = dict(site)
+    entry["search_url"] = _join(base, pattern)
+    entry["name"] = name
+    if progress:
+        progress("تم العثور على %d منتج. جاري الحفظ…" % len(rows))
+    return {"ok": True, "stage": "ok", "site": entry, "rows": len(rows),
+            "sample": rows[:3],
+            "message": "تمت إضافة %s بنجاح (%d منتج في صفحة النتائج)."
+                       % (name, len(rows))}
+
+
+def append_site(entry):
+    """Write one discovered store into sites.json, keeping the others.
+
+    Atomic: the file is rewritten next to itself and moved into place, so a
+    crash halfway cannot leave a store list that fails to parse - which would
+    take every configured store down, not just the new one.
+    """
+    path = sites_path()
+    data = {"sites": []}
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                loaded = json.load(f)
+            data = loaded if isinstance(loaded, dict) else {"sites": loaded}
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            logging.exception("could not read sites.json before append")
+            return None, "ملف sites.json غير صالح، لم يتم الحفظ."
+    sites = data.get("sites")
+    if not isinstance(sites, list):
+        sites = []
+    for s in sites:
+        if not isinstance(s, dict):
+            continue
+        if s.get("name") == entry["name"]:
+            return None, "المتجر %s موجود بالفعل." % entry["name"]
+        # Matched on host, not on name: the discovered name is the domain,
+        # while a store already in the file is called whatever its owner called
+        # it ("2B Egypt"), so "2b.com.eg" would otherwise be added as a second
+        # store and every search would show its products twice.
+        host = urlparse(s.get("search_url") or "").netloc.lower()
+        new_host = urlparse(entry.get("search_url") or "").netloc.lower()
+        if new_host and host and host == new_host:
+            return None, ("المتجر %s موجود بالفعل باسم %s."
+                          % (entry["name"], s.get("name", "?")))
+    sites.append(entry)
+    payload = json.dumps({"sites": sites}, ensure_ascii=False, indent=2) + "\n"
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(payload)
+        os.replace(tmp, path)
+    except OSError as e:
+        # The usual cause is a Program Files install: sites.json lives next to
+        # the exe so users can add a store by hand, which is read-only there.
+        logging.exception("could not write sites.json")
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        return None, ("تعذّر حفظ المتجر (%s). جرّب تشغيل البرنامج من مجلد "
+                      "تكتبه، أو أضف المتجر يدويًا إلى sites.json." % e)
+    return entry, None
+
+
 def settings_path():
     return os.path.join(data_dir(), SETTINGS_FILE)
 
@@ -1557,6 +2389,14 @@ class TrackerCore:
         # still on disk for the price-delta baseline above and for the
         # Sources page, which is explicitly about history.
         self.site_stats = {}
+        # The "add a store by URL" probe on the Sources page. It is a job with
+        # its own state because it outlives the call that starts it: the probe
+        # walks search-URL patterns with pauses between them and the page polls
+        # for progress rather than waiting on a bridge call that never returns.
+        self._add_lock = threading.Lock()
+        self._add_job = {"state": "idle", "message": "", "result": None,
+                         "url": ""}
+        self._add_cancel = False
         # Manifest cache. The page re-checks for updates while the window
         # stays open, and a repeating network fetch on every check is a
         # cost the user can feel. The manifest only changes when a new
@@ -2269,6 +3109,85 @@ class TrackerCore:
         self.save_settings()
         return True
 
+    # ----- adding a store by its URL -----
+    def add_store(self, url):
+        """Start working out how to read a pasted store URL.
+
+        A probe is a handful of real requests to somebody's server with pauses
+        between them, so it runs on its own thread and the page polls
+        add_store_status, exactly like a search. The window never blocks and
+        the button stays live to cancel.
+        """
+        with self._add_lock:
+            if self._add_job.get("state") == "running":
+                return {"ok": False, "started": False,
+                        "message": "هناك فحص جارٍ بالفعل."}
+            self._add_job = {"state": "running", "message": "جاري البدء…",
+                             "result": None, "url": url or ""}
+        t = threading.Thread(target=self._add_store_worker, args=(url or "",),
+                             daemon=True)
+        t.start()
+        return {"ok": True, "started": True, "message": "جاري فحص الموقع…"}
+
+    def cancel_add_store(self):
+        """Stops after the request in flight; nothing is half-saved."""
+        with self._add_lock:
+            if self._add_job.get("state") != "running":
+                return {"ok": False}
+            self._add_cancel = True
+            self._add_job["message"] = "جاري الإلغاء…"
+        return {"ok": True}
+
+    def add_store_status(self):
+        with self._add_lock:
+            job = dict(self._add_job)
+        return {"state": job.get("state", "idle"),
+                "message": job.get("message", ""),
+                "result": job.get("result")}
+
+    def _add_store_progress(self, message):
+        with self._add_lock:
+            if self._add_job.get("state") == "running":
+                self._add_job["message"] = message
+
+    def _add_store_worker(self, url):
+        """Probe, then save. Runs off the UI thread; never raises."""
+        try:
+            result = probe_store(url, progress=self._add_store_progress)
+            if result.get("ok"):
+                with self._add_lock:
+                    if self._add_cancel:
+                        self._add_job = {"state": "cancelled",
+                                         "message": "تم إلغاء الفحص.",
+                                         "result": None, "url": url}
+                        return
+                entry, err = append_site(result["site"])
+                if err:
+                    result = {"ok": False, "stage": "save", "message": err}
+                else:
+                    # Re-read rather than appending to the list in memory: the
+                    # file on disk is the source of truth, and load_sites also
+                    # rebuilds the per-site detail batch caps.
+                    sites, sites_error = load_sites()
+                    if sites_error:
+                        logging.error("sites.json unreadable after append: %s",
+                                      sites_error)
+                    else:
+                        self.sites = sites
+            state = "ok" if result.get("ok") else "failed"
+            with self._add_lock:
+                self._add_job = {"state": state,
+                                 "message": result.get("message", ""),
+                                 "result": result, "url": url}
+                self._add_cancel = False
+        except Exception:
+            logging.exception("add store failed")
+            with self._add_lock:
+                self._add_job = {"state": "failed",
+                                 "message": "حدث خطأ أثناء فحص الموقع.",
+                                 "result": None, "url": url}
+                self._add_cancel = False
+
     def set_columns(self, cols):
         cols = [c for c in (cols or []) if c in ALL_COLUMNS]
         if not cols:
@@ -2650,6 +3569,15 @@ class Api:
 
     def set_site_enabled(self, name, on):
         return {"ok": self._core.set_site_enabled(name or "", bool(on))}
+
+    def add_store(self, url):
+        return self._core.add_store(url or "")
+
+    def cancel_add_store(self):
+        return self._core.cancel_add_store()
+
+    def add_store_status(self):
+        return self._core.add_store_status()
 
     def set_columns(self, cols):
         return {"ok": self._core.set_columns(list(cols or []))}

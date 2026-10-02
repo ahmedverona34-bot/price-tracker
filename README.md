@@ -75,6 +75,64 @@ Optional keys: `paginate` (`{"param": "page", "max_pages": 5}`),
 `page_delay`, `refresh_sec`, `coupon_badge`, `detail_pages`, `detail_cap`,
 `use_playwright`.
 
+### Adding a store from its URL
+
+The Data Sources page (مصادر البيانات) can add a store the user has never
+configured: they paste the shop's link and the app works out how to read it.
+Pasting either the home page or a working search URL works — a search URL is
+easier, because the hard part (the path) is then already supplied.
+
+1. **Find the search URL.** Tries the conventional patterns (`?q=`,
+   `/search?q=`, `/catalogsearch/result/?q=` for Magento, WooCommerce's
+   `?post_type=product&s=`, …), most conventional first, up to
+   `_MAX_SEARCH_PROBES` requests with a short pause between each.
+2. **Guess the selectors.** The listing is the markup structure that repeats on
+   the page and carries both a price and a product link, so card candidates are
+   ranked on exactly that. Within a card, the title, prices and link are read
+   the same way.
+3. **Verify by parsing.** Each candidate goes through `_parse_cards` — the same
+   code a real search uses — and must produce a believable listing: several
+   rows, each with its own distinct link, a title, and prices that add up. Up
+   to `_MAX_SELECTOR_TRIES` candidates are tried against the page already in
+   hand; nothing is re-requested, because this loop repairs *our* guess, it does
+   not ask the store again.
+4. **Check the keyword is real.** The winning URL is requested once with a word
+   no shop stocks. A page returning the same listing for nonsense is rejected:
+   adding it would look healthy while answering every future search identically.
+5. **Save atomically.** The entry is appended to `sites.json` through a temp
+   file and `os.replace`, so an interrupted write cannot leave a store list that
+   fails to parse — which would take every configured store down, not just the
+   new one.
+
+A store already present is refused **by host**, not by name. The discovered name
+is the domain while an existing entry carries whatever its owner called it
+("2B Egypt"), so matching on name alone would add 2B a second time and show
+every product twice.
+
+**A store that blocks extraction is reported, not retried.** The probe stops at
+the first bot checkpoint (Cloudflare, Vercel BotID — see `looks_like_checkpoint`)
+and says so in Arabic, for the reason `fetch_html` already documents: asking a
+store that has blocked you again only deepens the block. Likewise a listing that
+only exists after JavaScript runs — there is no honest way to read it over plain
+HTTP, so the message says results were not found rather than retrying a page
+that will never answer. This is a deliberate limit: a loop that retries until a
+block lifts cannot converge (a challenge needs real JS execution and a browser
+fingerprint, not more HTTP requests), and its only remaining function would be
+circumventing an access control the store's owner put in place.
+
+**Two things worth not undoing:**
+
+- **A price must be a leaf.** 2B renders the compare-at and the current price as
+  `span.price` *in the same card*, separated only by `.old-price` and
+  `.special-price` wrappers. A selector naming the price container matches both,
+  and `parse_price` takes the first number — always the higher — so every
+  discounted product would silently report its pre-discount price.
+  `_is_price_leaf` and `_price_path` exist for exactly this.
+- **`parse_price` folds Arabic-Indic digits and Arabic separators** (`٬` U+066C,
+  `٫` U+066B). 2B's Arabic pages write "٦٧٬٧٩٩ ج.م."; without the fold that
+  reads as `67.0` instead of `67799.0` — wrong by a factor of a thousand, with
+  nothing reporting an error.
+
 ## Building a release
 
 ```bat
