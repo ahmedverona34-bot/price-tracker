@@ -389,8 +389,12 @@
   function renderExclChips() {
     var words = exclWords();
     setHTML($("exclChips"), words.map(function (w) {
-      return '<span class="chip excl-chip">' + esc(w)
-        + ' <button data-rm="' + esc(w) + '" aria-label="حذف ' + esc(w) + '">×</button></span>';
+      return '<span class="chip excl-chip"><span>' + esc(w) + "</span>"
+        + '<button data-rm="' + esc(w) + '" type="button"'
+        + ' aria-label="حذف ' + esc(w) + '" title="إزالة">'
+        + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+        + ' stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/>'
+        + "</svg></button></span>";
     }).join("") || '<span class="muted">لا توجد كلمات مستبعدة.</span>');
     Array.prototype.forEach.call(
       $("exclChips").querySelectorAll("[data-rm]"), function (b) {
@@ -438,10 +442,10 @@
 
   function renderDefaultCols() {
     setHTML($("defaultCols"), COLUMNS.map(function (c) {
-      return '<span class="chip"><input type="checkbox" data-col="' + c.key + '"'
+      return '<label class="col-opt"><input type="checkbox" data-col="' + c.key + '"'
         + (state.cols.indexOf(c.key) >= 0 ? " checked" : "")
-        + ' aria-label="' + esc(c.label) + '"> '
-        + esc(c.label) + "</span>";
+        + ' aria-label="' + esc(c.label) + '">'
+        + "<span>" + esc(c.label) + "</span></label>";
     }).join(""));
     Array.prototype.forEach.call(
       $("defaultCols").querySelectorAll("input"), function (cb) {
