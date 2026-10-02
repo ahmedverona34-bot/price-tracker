@@ -58,6 +58,7 @@
     rowsToken: -1,
     pinned: false,
     wasSearching: false,
+    hasSearched: false,   // results section revealed (first search happened)
     lastMsg: "",
     lastUpdatedAt: ""
   };
@@ -844,8 +845,30 @@
   /* ------------------------------------------------------------------ *
    * Search
    * ------------------------------------------------------------------ */
-  function showSearching() {
+  /* The results section — its toolbar and the table card — ships hidden, so a
+     window nobody has searched in yet shows only the filters instead of a tall
+     empty box telling the user to search. It appears on the first search and
+     stays for the rest of the session. */
+  var RESULT_SECTIONS = ["resultsBar", "resultsCard"];
+
+  function showResults() {
+    if (state.hasSearched) return;
+    state.hasSearched = true;
+    RESULT_SECTIONS.forEach(function (id) {
+      var el = $(id);
+      if (!el) return;
+      // The first-paint stagger delays belong to a page load, not to a click,
+      // so they are dropped here and the sections fade up together instead.
+      el.classList.remove("hidden", "rise", "rise-3", "rise-4");
+      void el.offsetWidth;          // reflow, so re-adding `rise` restarts it
+      el.classList.add("rise");     // the app's own entrance, replayed
+    });
+  }
+
+  function showSearching(q) {
     state.wasSearching = true;
+    showResults();
+    if (q) $("sectionTitle").textContent = "جاري البحث عن \"" + q + "\"…";
     renderSkeletons();
     $("searchBtn").disabled = true;
   }
@@ -869,7 +892,9 @@
 
   function doSearch() {
     var q = $("q").value.trim();
-    showSearching();
+    // An empty box is refused by the backend; don't reveal the results section
+    // for a search that never ran, the toast says it plainly.
+    if (q) showSearching(q);
     toast('يجري البحث عن "' + (q || "…") + '"...');
     api("search", q).then(function (res) {
       if (res && res.message) toast(res.message);
@@ -1627,6 +1652,9 @@
       if (!first) toast(st.message);
     }
     syncChrome(st);
+    // The auto-refresh scheduler can start a search without the button ever
+    // being clicked; that path reveals the results section too.
+    if (st.searching) showResults();
     if (st.searching !== state.wasSearching) {
       state.wasSearching = st.searching;
       apply();
@@ -1666,6 +1694,11 @@
     }
     if (status && status.rows_token !== undefined)
       state.rowsToken = status.rows_token;
+    // A fixture stands in for a search that ran, so the results section — held
+    // back until then in the real app — has to be revealed for the rows to be
+    // observable at all.
+    if ((state.status && state.status.searching) || (rows && rows.length))
+      showResults();
     if (state.status && state.status.searching) renderSkeletons();
     syncChrome(state.status);
     render();

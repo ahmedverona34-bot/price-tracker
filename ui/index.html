@@ -172,8 +172,13 @@ try {
           </div>
         </section>
 
-        <!-- ---- Table toolbar ---- -->
-        <section class="toolbar rise rise-3">
+        <!-- ---- Table toolbar ----
+             The toolbar and the table below it are one unit and both start
+             hidden: before the first search there is nothing to label, export
+             or scroll, and an empty bordered card is the loudest thing on the
+             page for no reason. showResults() in app.js reveals them on the
+             first search and replays their `rise` entrance. ---- -->
+        <section class="toolbar rise rise-3 hidden" id="resultsBar">
           <div class="toolbar-left">
             <h2 id="sectionTitle">نتائج البحث</h2>
             <span id="liveBadge" class="pill pill-live hidden">
@@ -208,7 +213,7 @@ try {
 
         <!-- ---- The sticky data table ---- -->
           <!-- mb-3 on the sections above is the reference's own rhythm -->
-        <div class="table-card rise rise-4">
+        <div class="table-card rise rise-4 hidden" id="resultsCard">
           <div class="table-wrap">
             <table id="grid" aria-label="نتائج الأسعار">
               <thead><tr id="headRow"></tr></thead>
