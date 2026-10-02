@@ -93,6 +93,13 @@ easier, because the hard part (the path) is then already supplied.
    matches every post type and returns blog posts with no prices in them, while
    `?s=iphone&post_type=product` returns the listing. The form's other params
    are carried over, which is how that filter is picked up.
+2. **Find how the results paginate.** Page one is not the answer — it is the
+   difference between 12 products and 598. The count and the *style* are read
+   off the result page's own pager: WordPress permalinks put the number in the
+   path (`/ar/page/2/`) while Shopify uses `?page=2`, and guessing the wrong one
+   is invisible — every request answers with page 1 again and the search
+   reports a full-looking result. Capped at `_MAX_AUTO_PAGES`, and an explicit
+   `paginate.max_pages` in the config still wins.
 2. **Guess the selectors.** The listing is the markup structure that repeats on
    the page and carries both a price and a product link, so card candidates are
    ranked on exactly that. Within a card, the title, prices and link are read
@@ -144,6 +151,12 @@ circumventing an access control the store's owner put in place.
   iPhone 15 priced at £69,400 was showing as 15. `_looks_pricey` requires the
   text to be digits, separators and a currency mark; a category tile reading
   "1035 products" is rejected the same way.
+- **A link is not an action.** `miamicenters`' add-to-cart button is an `<a>`
+  whose href is `…?add-to-cart=<id>` on some pages and a real product URL on
+  others, so a selector built from it collapsed 598 products to 460 — every card
+  past the 38th page resolved to the same address and was dropped as a
+  duplicate. `_usable_href` rejects action-only hrefs, and the image link
+  (`/product/<slug>`) is what a card's real link is read from.
 
 ## Building a release
 

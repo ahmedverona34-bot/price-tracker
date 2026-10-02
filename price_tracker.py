@@ -1213,6 +1213,15 @@ def paginated_urls(site, url):
     Vercel, 16 cards per page, `?page=N`) hands over the whole list without a
     browser. Walking those pages replaces the old scroll-and-wait loop, so the
     search no longer needs a real browser at all.
+
+    Two page-number styles, because stores disagree:
+
+    - `"param": "page"` appends `?page=N` (Dubai Phone).
+    - `"path": "/page/{n}/"` inserts the number into the path itself, which is
+      what WordPress permalinks do (miamicenters: `/ar/page/2/?s=iphone`). A
+      `?page=` guess against such a site silently returns page 1 again for every
+      page - the search "succeeds" and reports twelve products out of six
+      hundred - because the unknown param is simply ignored.
     """
     pages = site.get("paginate") or site.get("pages") or {}
     if not isinstance(pages, dict) or not pages:
@@ -1221,11 +1230,138 @@ def paginated_urls(site, url):
         max_pages = int(pages.get("max_pages") or 1)
     except (TypeError, ValueError):
         max_pages = 1
+
+    # Path style first: the template has to win over any param, because a path
+    # page number is the only thing this store reads.
+    template = pages.get("path") or pages.get("path_template")
+    if template:
+        stem = str(template)
+        if "{n}" not in stem and "{page}" not in stem:
+            stem = stem.rstrip("/") + "/{n}/"
+        out = []
+        for i in range(1, max_pages + 1):
+            page = stem.replace("{n}", str(i)).replace("{page}", str(i))
+            # Every page must carry the search itself. The template replaces the
+            # path, so the original query string is appended or merged: dropping
+            # it would fetch the store's generic /page/N/ and come back with a
+            # listing for no keyword at all.
+            query = ""
+            if "?" in url:
+                query = url.split("?", 1)[1]
+            if not query:
+                continue        # nothing to search for; walk only this page
+            joined = urljoin(url, page)
+            out.append("%s?%s" % (joined, query) if "?" not in joined
+                       else "%s&%s" % (joined, query))
+        # Page 1 is the store's own first result URL, which usually is not
+        # /page/1/ even when the rest of the walk is /page/N/.
+        return [url] + out[1:] if out else [url]
+
     param = str(pages.get("param") or "page")
     sep = "&" if "?" in url else "?"
     # First page is the bare search URL (it carries no ?page=), then 2..N.
     return [url] + ["%s%s%s=%d" % (url, sep, param, i)
                     for i in range(2, max_pages + 1)]
+
+
+def detect_page_path(soup, final_url):
+    """The path template this site's page links use, or None.
+
+    Read off the result page's own pagination, which is the only place the store
+    states how its pages are addressed. WordPress permalinks insert the number
+    into the path (`/ar/page/2/`); a `?page=2` guess against such a site is
+    ignored and hands back page 1 again, so the search reports a dozen products
+    out of six hundred and looks like it worked.
+
+    Only a number *inside the path* is accepted. `?page=2` is the query style and
+    needs no template - it is what paginated_urls already builds.
+    """
+    best = None
+    for a in soup.select("a[href]"):
+        label = a.get_text(strip=True)
+        if not label.isdigit():
+            continue
+        try:
+            n = int(label)
+        except ValueError:
+            continue
+        if not 2 <= n <= 500:
+            continue
+        href = (a.get("href") or "").strip()
+        if not href:
+            continue
+        path = urlparse(urljoin(final_url, href)).path
+        if not re.search(r"(?<!\d)%d(?!\d)" % n, path):
+            continue
+        template = re.sub(r"(?<!\d)%d(?!\d)" % n, "{n}", path, count=1)
+        if best is None or n > best[1]:
+            best = (template, n)
+    return best[0] if best else None
+
+
+def detect_page_param(soup, final_url):
+    """The query parameter this site's page links use, or None.
+
+    The counterpart to detect_page_path. Shopify links pages as `?page=2`, which
+    paginated_urls can already build - but only when the config says so, and
+    nothing says so for a store the user pasted a link for. Read off the pager
+    so the query style is detected rather than assumed to be the path style.
+    """
+    best = None
+    for a in soup.select("a[href]"):
+        label = a.get_text(strip=True)
+        if not label.isdigit():
+            continue
+        try:
+            n = int(label)
+        except ValueError:
+            continue
+        if not 2 <= n <= 500:
+            continue
+        query = urlparse(urljoin(final_url, a.get("href") or "")).query
+        if not query:
+            continue
+        for pair in query.split("&"):
+            key, _, value = pair.partition("=")
+            if value.isdigit() and 2 <= int(value) <= 500:
+                if best is None or int(value) > best[1]:
+                    best = (key, int(value))
+    return best[0] if best else None
+
+
+def detect_pagination(site, url, html):
+    """How many result pages this listing has, read off its own pagination.
+
+    Best-effort, and it never invents a number: an empty result means
+    "single page" or "cannot tell", and the caller keeps the conservative
+    default. A discovered count is capped by whatever the site was configured
+    with, because walking 50 pages of someone's server on every refresh is not a
+    decision this function gets to make silently.
+    """
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+    except Exception:
+        return None
+    nums = []
+    last_number = None
+    for a in soup.select("a[href]"):
+        label = a.get_text(strip=True)
+        if label.isdigit():
+            try:
+                n = int(label)
+            except ValueError:
+                continue
+            if 1 < n <= 500:
+                nums.append(n)
+                last_number = max(last_number or 0, n)
+    if not nums:
+        return None
+    # The highest numbered link is the page count, not a page to walk *to*: a
+    # listing of 50 pages ends with "50" as its last entry, and asking for
+    # /page/51/ is a 404. miamicenters advertises 50 and starts at 1, so the
+    # count is 50 pages.
+    found = last_number
+    return max(1, found)
 
 
 def scrape_site(site, query, progress=None, enrich=True):
@@ -1242,6 +1378,36 @@ def scrape_site(site, query, progress=None, enrich=True):
     url = site["search_url"].replace("{q}", quote_plus(query))
     pages = paginated_urls(site, url)
     delay = page_delay_range(site)
+    if site.get("autopaginate") and len(pages) == 1:
+        # The page number was not configured, so the count is read off the first
+        # result page's own pagination and the walk is extended to match. Capped
+        # by max_pages so one search cannot walk an unbounded number of pages.
+        with PERF.stage("paginate:detect", name):
+            first_html, first_final = fetch_html(
+                url, use_playwright=site.get("use_playwright", False), site_key=key)
+        soup = BeautifulSoup(first_html, "html.parser")
+        found = detect_pagination(site, url, first_html)
+        template = (detect_page_path(soup, first_final)
+                    if found and found > 1 else None)
+        if found and found > 1:
+            cap = min(found, _MAX_AUTO_PAGES)
+            configured = (site.get("paginate") or {}).get("max_pages")
+            if configured:
+                # An explicit limit in the config wins over what the page shows.
+                try:
+                    cap = min(cap, max(1, int(configured)))
+                except (TypeError, ValueError):
+                    pass
+            if template:
+                page_rule = {"path": template, "max_pages": cap}
+            else:
+                page_rule = {"param": detect_page_param(soup, first_final) or "page",
+                             "max_pages": cap}
+            pages = paginated_urls(dict(site, paginate=page_rule), url)
+            PERF.note("%s: %d result pages%s, walking %d"
+                      % (name, found,
+                         " at %s" % template if template
+                         else " via ?%s=" % page_rule.get("param"), cap))
     rows, seen, empty_pages = [], set(), 0
     for i, page_url in enumerate(pages):
         if i:
@@ -1515,6 +1681,11 @@ _MIN_CARDS = 3
 # they are skipped when a card set is being guessed.
 _NEVER_CARD = {"html", "head", "body", "script", "style", "nav", "header",
                "footer", "form", "option", "svg", "path", "noscript", "iframe"}
+
+# Ceiling for an automatically discovered page walk. A search that reads 50
+# result pages is already heavy on someone else's server; this is here so a
+# store advertising 500 pages cannot turn one refresh into 500 requests.
+_MAX_AUTO_PAGES = 50
 
 # A class has to be usable in a selector verbatim; storefronts emit hashed or
 # colon-separated names that soupsieve cannot take unescaped.
@@ -1951,11 +2122,23 @@ def _usable_href(el):
     `<a href="#">`. Counting one as the card's link makes the guesser settle on
     `a`, which then resolves to the wishlist button in every card and leaves
     the whole listing sharing a single link.
+
+    An action that only mutates rather than navigates is not a link to the
+    product either: miamicenters' add-to-cart button is an `<a>` whose href is
+    the current page plus `?add-to-cart=<id>`, so on some pages every card
+    resolves to the same address and the listing collapses to one row. The id
+    lives in the URL's query, which makes it useless as a per-product key, so
+    those are skipped and the real `/product/<slug>` link is used instead.
     """
     if el.name != "a":
         return ""
     href = (el.get("href") or "").strip()
     if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+        return ""
+    query = urlparse(href).query
+    if query and any(k in query.lower().replace("+", " ")
+                     for k in ("add-to-cart=", "add_to_cart", "remove-from-cart",
+                                "quantity=", "action=add")):
         return ""
     return href
 
@@ -2427,12 +2610,42 @@ def probe_store(raw_url, progress=None):
     entry = dict(site)
     entry["search_url"] = _join(base, pattern)
     entry["name"] = name
+    # A listing that paginates and was not told how is the difference between
+    # twelve products and the whole catalogue: the search reports what it
+    # fetched, and page one looks like a complete answer. Walking the pages is
+    # discovered here so the stored store behaves like the two hand-written
+    # ones, and capped by _MAX_AUTO_PAGES.
+    soup = BeautifulSoup(html, "html.parser")
+    found = detect_pagination(entry, entry["search_url"], html)
+    if found and found > 1:
+        cap = min(found, _MAX_AUTO_PAGES)
+        # Which style the store uses is read off its pager, not assumed: a
+        # WordPress permalink wants /page/N/ while Shopify wants ?page=N, and
+        # guessing wrong returns page 1 for every page asked for.
+        template = detect_page_path(soup, final_url)
+        if template:
+            page_rule = {"path": template, "max_pages": cap}
+        else:
+            param = detect_page_param(soup, final_url) or "page"
+            page_rule = {"param": param, "max_pages": cap}
+        entry["paginate"] = page_rule
+        entry["page_delay"] = [0.5, 1.1]
     if progress:
-        progress("تم العثور على %d منتج. جاري الحفظ…" % len(rows))
+        # Says what page one held and how far the walk goes, because a store
+        # that spans 50 pages takes about a minute and silence would read as a
+        # hang. The count is what the store paginates to, not what it yields:
+        # miamicenters repeats its last page for the final four entries, so 50
+        # pages hold 460 products rather than 600.
+        progress("تم العثور على %d منتج%s. جاري الحفظ…"
+                 % (len(rows),
+                    " موزعة على %d صفحة" % entry["paginate"]["max_pages"]
+                    if entry.get("paginate") else ""))
     return {"ok": True, "stage": "ok", "site": entry, "rows": len(rows),
             "sample": rows[:3],
-            "message": "تمت إضافة %s بنجاح (%d منتج في صفحة النتائج)."
-                       % (name, len(rows))}
+            "message": "تمت إضافة %s بنجاح (%d منتج%s)."
+                       % (name, len(rows),
+                          " في %d صفحة" % entry["paginate"]["max_pages"]
+                          if entry.get("paginate") else " في صفحة النتائج")}
 
 
 def append_site(entry):
