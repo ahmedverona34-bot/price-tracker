@@ -1,0 +1,74 @@
+/* ===========================================================================
+   Animations — lightweight motion layer for the Price Tracker window.
+   ---------------------------------------------------------------------------
+   Shared keyframes/classes block first (verbatim, do not restyle), then a
+   small project glue section that only wires positioning and theme tokens:
+   dot wrappers for the ping rings, the light-theme accent + checkbox colors,
+   and one specificity fix so the animated checkmark replaces the old SVG one.
+   No layout, palette, or data-flow change lives here.
+   =========================================================================== */
+
+:root { --accent-rgb: 78, 222, 163; }
+
+@keyframes radar-ping { 0% { transform: scale(0.95); opacity: 0.8; } 50% { transform: scale(2.2); opacity: 0; } 100% { transform: scale(2.4); opacity: 0; } }
+@keyframes spin-slow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes subtle-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1.5px); } }
+@keyframes discount-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0); } 50% { box-shadow: 0 0 10px 1px rgba(var(--accent-rgb), 0.25); } }
+@keyframes row-fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+.ping-ring { animation: radar-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite; }
+.sync-rotate { animation: spin-slow 12s linear infinite; }
+.float-subtle { animation: subtle-float 3s ease-in-out infinite; }
+.discount-pulse { animation: discount-glow 3s ease-in-out infinite; }
+.table-row-animated { animation: row-fade-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+.tr-delay-1 { animation-delay: 40ms; } .tr-delay-2 { animation-delay: 80ms; } .tr-delay-3 { animation-delay: 120ms; } .tr-delay-4 { animation-delay: 160ms; } .tr-delay-5 { animation-delay: 200ms; } .tr-delay-6 { animation-delay: 240ms; } .tr-delay-7 { animation-delay: 280ms; } .tr-delay-8 { animation-delay: 320ms; } .tr-delay-9 { animation-delay: 360ms; } .tr-delay-10 { animation-delay: 400ms; } .tr-delay-11 { animation-delay: 440ms; } .tr-delay-12 { animation-delay: 480ms; } .tr-delay-13 { animation-delay: 520ms; } .tr-delay-14 { animation-delay: 560ms; } .tr-delay-15 { animation-delay: 600ms; }
+
+.custom-checkbox { appearance: none; background-color: #1e2024; border: 1.5px solid #434655; border-radius: 4px; width: 15px; height: 15px; display: inline-grid; place-content: center; cursor: pointer; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); position: relative; }
+.custom-checkbox:hover { border-color: #b4c5ff; transform: scale(1.08); }
+.custom-checkbox:checked { background-color: #2563eb; border-color: #2563eb; box-shadow: 0 0 8px rgba(37, 99, 235, 0.4); }
+.custom-checkbox::before { content: ""; width: 8px; height: 5px; border-left: 2px solid #ffffff; border-bottom: 2px solid #ffffff; transform: rotate(-45deg) scale(0) translate(1px, -1px); transition: transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+.custom-checkbox:checked::before { transform: rotate(-45deg) scale(1) translate(1px, -1px); }
+
+.hover-pop { transition: transform 0.2s ease; }
+.hover-pop:hover { transform: scale(1.05); }
+.hover-pop:active { transform: scale(0.95); }
+
+.pill-lift { transition: transform 0.2s ease, border-color 0.2s ease, background-color 0.2s ease; }
+.pill-lift:hover { transform: translateY(-2px); }
+.pill-lift:active { transform: translateY(0); }
+
+.toast { transition: all 0.3s ease; opacity: 0; pointer-events: none; transform: translateY(12px); }
+.toast.is-visible { opacity: 1; pointer-events: auto; transform: translateY(0); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+
+/* ===========================================================================
+   Project glue — positioning + theme tokens only.
+   =========================================================================== */
+
+/* Light theme glow follows the light secondary token (#16a34a). */
+[data-theme="light"] { --accent-rgb: 22, 163, 74; }
+
+/* Ping-ring wrapper: relatively positioned, sized by the dot it holds; the
+   ring itself is an absolutely positioned circle reusing the dot's size.
+   Ring color follows the sibling dot status via project tokens only. */
+.dot-wrap { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+.ping-ring { position: absolute; inset: 0; border-radius: 9999px; background: var(--secondary); pointer-events: none; }
+.dot-wrap .dot.slow ~ .ping-ring,
+.dot-wrap .dot.loading ~ .ping-ring { background: var(--tertiary); }
+.dot-wrap .dot.failed ~ .ping-ring,
+.dot-wrap .dot.blocked ~ .ping-ring { background: var(--error); }
+.dot-wrap .dot.idle ~ .ping-ring,
+.dot-wrap .dot.off ~ .ping-ring { background: var(--outline); }
+
+/* The base checkbox rule in styles.css outranks the plain class selector, so
+   the animated checkmark needs one stronger selector to drop the old SVG
+   background; everything else (size, colors) already agrees with the tokens. */
+input.custom-checkbox:checked { background-image: none; }
+
+/* Light theme checkbox surfaces follow the light tokens. */
+[data-theme="light"] input.custom-checkbox { background-color: var(--surface-container); border-color: var(--outline-variant); }
+[data-theme="light"] input.custom-checkbox:hover { border-color: var(--primary-container); }
