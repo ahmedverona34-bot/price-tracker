@@ -258,23 +258,6 @@ button { font-family: inherit; }
 }
 .avatar svg { width: 18px; height: 18px; }
 
-/* Theme toggle — same 32px circle language as the avatar, quiet by default. */
-.theme-btn {
-  width: 32px; height: 32px;
-  border-radius: var(--r-full);
-  background: var(--surface-container-low);
-  color: var(--on-surface-variant);
-  border: 1px solid var(--outline-20);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 32px;
-  cursor: pointer;
-  padding: 0;
-}
-.theme-btn:hover { background: var(--surface-container-high); color: var(--on-surface); }
-.theme-btn svg { width: 18px; height: 18px; }
-
 /* Light theme needs real hairlines where dark blends into itself. */
 [data-theme="light"] #topbar { border-bottom: 1px solid var(--outline-20); }
 [data-theme="light"] #rail { border-left: 1px solid var(--outline-20); }
@@ -1746,10 +1729,9 @@ input[type="text"] { font-family: inherit; }
 }
 
 /* ===========================================================================
-   Topbar settings — glass dropdown + side panels
+   Rail settings — glass dropdown + side panels
    Single type scale (13px body / 12px hint / 15px title), 18px icons.
    =========================================================================== */
-.topbar-settings-wrap { position: relative; }
 #settingsTopBtn.active {
   background: var(--primary-container);
   color: var(--on-primary-container);

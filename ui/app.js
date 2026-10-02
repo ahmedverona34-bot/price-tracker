@@ -129,8 +129,8 @@
     document.documentElement.setAttribute("data-theme", t);
     try { localStorage.setItem(THEME_KEY, t); } catch (e) { /* private mode */ }
     var moon = $("themeIconMoon"), sun = $("themeIconSun"), btn = $("themeBtn");
-    if (moon) moon.classList.toggle("hidden", t !== "light");
-    if (sun) sun.classList.toggle("hidden", t !== "dark");
+    if (moon) moon.classList.toggle("hidden", t !== "dark");
+    if (sun) sun.classList.toggle("hidden", t !== "light");
     if (btn) btn.title = (t === "light")
       ? "التبديل إلى الوضع الداكن" : "التبديل إلى الوضع الفاتح";
   }
@@ -482,9 +482,13 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * Sidebar pages
-   * ------------------------------------------------------------------ */
-  var railBtns = document.querySelectorAll(".rail-btn");
+   * Sidebar pages.
+   * ------------------------------------------------------------------ *
+   * Scoped to .rail-nav on purpose: the rail-bottom carries action buttons
+   * (theme toggle, update notice) that must never switch pages. Giving one
+   * of those the .rail-btn look without this scoping blanks the window,
+   * because no .page matches "page-undefined". */
+  var railBtns = document.querySelectorAll(".rail-nav .rail-btn");
   Array.prototype.forEach.call(railBtns, function (btn) {
     btn.addEventListener("click", function () {
       Array.prototype.forEach.call(railBtns, function (b) {
@@ -498,9 +502,11 @@
     });
   });
 
-  /* Topbar settings: floating glass menu + side panels.
+  /* Settings: floating glass menu + side panels.
      The float layer lives on <body> (outside the blurred header) and is
-     anchored under the gear button with fixed positioning. */
+     anchored to the gear button with fixed positioning. The gear lives at
+     the bottom of the rail, so the menu opens upward whenever there is no
+     room below the button. */
   (function settingsDropdown() {
     var topBtn = $("settingsTopBtn"), menu = $("settingsMenu");
     if (!topBtn || !menu) return;
@@ -513,7 +519,10 @@
       var r = topBtn.getBoundingClientRect();
       var mw = 232;
       var ml = Math.max(8, Math.min(r.left, window.innerWidth - mw - 8));
+      var mh = menu.offsetHeight || 320;
       var mt = r.bottom + 10;
+      if (mt + mh > window.innerHeight - 8)
+        mt = Math.max(8, r.top - mh - 10);
       menu.style.left = ml + "px";
       menu.style.top = mt + "px";
       var open = null;
@@ -522,15 +531,22 @@
       });
       if (open) {
         var pw = Math.min(430, window.innerWidth - 32);
+        var ph = open.offsetHeight || 400;
         if (window.innerWidth <= 900) {
+          var pt = mt + mh + 8;
+          if (pt + ph > window.innerHeight - 8)
+            pt = Math.max(8, mt - ph - 8);
           open.style.left = ml + "px";
-          open.style.top = (mt + menu.offsetHeight + 8) + "px";
+          open.style.top = pt + "px";
         } else {
           var pl = ml + mw + 12;
           if (pl + pw > window.innerWidth - 8)
             pl = Math.max(8, ml - pw - 12);
+          var ptt = mt;
+          if (ptt + ph > window.innerHeight - 8)
+            ptt = Math.max(8, window.innerHeight - 8 - ph);
           open.style.left = pl + "px";
-          open.style.top = mt + "px";
+          open.style.top = ptt + "px";
         }
       }
     }
@@ -688,7 +704,8 @@
     if (!railBtn) return;
 
     api("app_version").then(function (v) {
-      if (v && v.version) $("railVer").textContent = "v" + v.version;
+      var rv = $("railVer");
+      if (v && v.version && rv) rv.textContent = "v" + v.version;
     });
 
     function show(msg) { toast(msg); }
