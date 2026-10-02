@@ -395,10 +395,21 @@
       el.appendChild(b);
     }
     box.appendChild(el);
+    // The slide-and-fade transition runs off the .is-visible class (see
+    // animations.css). It is added on the next frame so the entrance
+    // transition actually plays instead of painting the final state.
+    function show() { el.classList.add("is-visible"); }
+    if (window.requestAnimationFrame) {
+      window.requestAnimationFrame(function () {
+        window.requestAnimationFrame(show);
+      });
+    } else {
+      show();
+    }
     while (box.children.length > 3) box.removeChild(box.firstChild);
     setTimeout(function () {
-      el.style.opacity = "0";
-      setTimeout(function () { el.remove(); }, 200);
+      el.classList.remove("is-visible");
+      setTimeout(function () { el.remove(); }, 300);
     }, 4500);
   }
 
@@ -491,7 +502,7 @@
 
   function renderDefaultCols() {
     setHTML($("defaultCols"), COLUMNS.map(function (c) {
-      return '<label class="col-opt"><input type="checkbox" data-col="' + c.key + '"'
+      return '<label class="col-opt"><input type="checkbox" class="custom-checkbox" data-col="' + c.key + '"'
         + (state.cols.indexOf(c.key) >= 0 ? " checked" : "")
         + ' aria-label="' + esc(c.label) + '">'
         + "<span>" + esc(c.label) + "</span></label>";
@@ -667,19 +678,20 @@
       var shown = q ? sites.filter(function (s) {
         return (s.name + " " + (s.pattern || "")).toLowerCase().indexOf(q) >= 0;
       }) : sites;
-      setHTML($("sitesBody"), shown.map(function (s) {
+      setHTML($("sitesBody"), shown.map(function (s, i) {
         var dot = s.status || (s.enabled ? "idle" : "off");
-        return "<tr>"
+        var delay = Math.min(i + 1, 15);
+        return '<tr class="table-row-animated tr-delay-' + delay + '">'
           + '<td class="c-pick"><span class="site-badge" aria-hidden="true">'
           + esc(s.name.slice(0, 2)) + "</span></td>"
           + '<td class="c-site"><b>' + esc(s.name) + "</b></td>"
           + '<td class="c-time"><span class="pattern">'
           + patternHtml(s.pattern) + "</span></td>"
-          + '<td><span class="pill pill-site"><span class="dot ' + esc(dot)
-          + '"></span>' + esc(SITE_STATUS[s.status] || "—") + "</span></td>"
+          + '<td><span class="pill pill-site"><span class="dot-wrap"><span class="dot ' + esc(dot)
+          + '"></span><span class="ping-ring" aria-hidden="true"></span></span>' + esc(SITE_STATUS[s.status] || "—") + "</span></td>"
           + '<td class="num center">' + (s.rows || 0) + "</td>"
           + '<td class="num">' + (s.duration_sec || 0) + " ث</td>"
-          + '<td class="center"><input type="checkbox" class="site-toggle"'
+          + '<td class="center"><input type="checkbox" class="custom-checkbox site-toggle"'
           + ' data-site="' + esc(s.name) + '"' + (s.enabled ? " checked" : "")
           + ' aria-label="تفعيل ' + esc(s.name) + '"></td></tr>';
       }).join(""));
@@ -812,7 +824,7 @@
 
   function renderColMenu() {
     setHTML($("colMenu"), COLUMNS.map(function (c) {
-      return '<label><input type="checkbox" data-col="' + c.key + '"'
+      return '<label><input type="checkbox" class="custom-checkbox" data-col="' + c.key + '"'
         + (state.cols.indexOf(c.key) >= 0 ? " checked" : "")
         + "> " + (c.label || "صورة") + "</label>";
     }).join(""));
@@ -940,7 +952,7 @@
    * ------------------------------------------------------------------ */
   function renderHead() {
     var pick = '<th class="c-pick" scope="col">'
-      + '<input type="checkbox" id="pickAll" aria-label="تحديد كل صفوف الصفحة">'
+      + '<input type="checkbox" class="custom-checkbox" id="pickAll" aria-label="تحديد كل صفوف الصفحة">'
       + "</th>";
     setHTML($("headRow"), pick + orderCols(state.cols).map(function (key) {
       var col = COLUMNS.filter(function (c) { return c.key === key; })[0];
@@ -1018,7 +1030,7 @@
         + ' data-site="' + esc(s.name) + '"'
         + ' aria-pressed="' + on + '"'
         + (s.enabled ? "" : ' disabled title="مقفول من صفحة المصادر"') + ">"
-        + '<span class="dot ' + esc(dot) + '"></span>' + esc(s.name)
+        + '<span class="dot-wrap"><span class="dot ' + esc(dot) + '"></span><span class="ping-ring" aria-hidden="true"></span></span>' + esc(s.name)
         + ' <span class="meta">' + count + (meta ? " • " + meta : "")
         + "</span></button>";
     }).join(""));
@@ -1094,7 +1106,7 @@
     }
     if (key === "discount") {
       return (toNum(r.discount) || 0) > 0
-        ? '<span class="c-disc has">' + r.discount + "%-</span>"
+        ? '<span class="c-disc has discount-pulse">' + r.discount + "%-</span>"
         : '<span class="c-disc none">—</span>';
     }
     if (key === "link") {
@@ -1209,9 +1221,9 @@
     var slice = v.rows;
     var cols = orderCols(state.cols);
 
-    setHTML(tb, slice.map(function (r) {
+    setHTML(tb, slice.map(function (r, i) {
       var tds = '<td class="c-pick">'
-        + '<input type="checkbox" data-pick="' + esc(r.link) + '"'
+        + '<input type="checkbox" class="custom-checkbox" data-pick="' + esc(r.link) + '"'
         + (state.selected[r.link] ? " checked" : "")
         + ' aria-label="تحديد الصف"></td>' + cols.map(function (key) {
         var extra = key === "title" ? ' title="' + esc(r.title) + '"' : "";
@@ -1220,8 +1232,12 @@
         return '<td class="' + cls.trim() + '"' + extra + ">"
           + cellHtml(r, key) + "</td>";
       }).join("");
+      // Staggered entrance: each row fades in 40ms after the previous one,
+      // capped at 15 steps so long result sets stay snappy.
+      var delay = Math.min(i + 1, 15);
       return '<tr data-link="' + esc(r.link) + '"'
-        + (state.selected[r.link] ? ' class="selected"' : "")
+        + ' class="table-row-animated tr-delay-' + delay
+        + (state.selected[r.link] ? " selected" : "") + '"'
         + ">" + tds + "</tr>";
     }).join(""));
 
