@@ -182,14 +182,14 @@ KIND_CHOICES = (KIND_DEVICES, KIND_ACCESSORIES, KIND_ALL)
 # Appearance presets inspired by terminalcolors.com palettes. IDs are stable
 # (persisted in settings.json); labels are Arabic for the settings page.
 # Dark hex follow the official palettes: Dracula #282a36/#bd93f9,
-# Tokyo Night #1a1b26/#7aa2f7, Catppuccin Mocha #1e1e2e/#cba6f7,
-# Nord #2e3440/#88c0d0, Gruvbox #282828/#fabd2f, Solarized #002b36/#268bd2,
-# One Dark #282c34/#61afef. Each id also has a light counterpart
-# (Alucard #fffbeb, Tokyo Day #e1e2e7, Latte #eff1f5, Gruvbox light
-# #fbf1c7, Solarized light #fdf6e3, One Light #fafafa, Nord light derived
-# from Snow Storm #eceff4), so the light/dark toggle never clashes.
-APPEARANCES = ("default", "dracula", "tokyo-night", "catppuccin",
-               "nord", "gruvbox", "solarized", "one-dark")
+# Nord #2e3440/#88c0d0, Gruvbox #282828/#fabd2f, Everforest #2d353b/#a7c080,
+# Rose Pine #191724/#ebbcba, Ayu #0f1419/#ff8f40, Kanagawa #1f1f28/#d27e99.
+# Each id also has a light counterpart (Alucard #fffbeb, Everforest light
+# #fdf6e3, Rose Pine Dawn #faf4ed, Ayu light #fafafa, Kanagawa Lotus
+# #f2ecbc, Nord light derived from Snow Storm #eceff4), so the light/dark
+# toggle never clashes.
+APPEARANCES = ("default", "dracula", "nord", "gruvbox", "everforest",
+               "rose-pine", "ayu", "kanagawa")
 FONT_SCALES = ("small", "medium", "large")
 
 # How many product pages are opened at once when checking for coupons. Over

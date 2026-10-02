@@ -151,12 +151,12 @@
   var APPEARANCES = [
     { id: "default", label: "الافتراضي", sw: "#2563eb" },
     { id: "dracula", label: "دراكولا", sw: "#bd93f9" },
-    { id: "tokyo-night", label: "طوكيو نايت", sw: "#7aa2f7" },
-    { id: "catppuccin", label: "كاتبوتشين", sw: "#89b4fa" },
     { id: "nord", label: "نورد", sw: "#88c0d0" },
     { id: "gruvbox", label: "جروفبوكس", sw: "#fabd2f" },
-    { id: "solarized", label: "سولارايزد", sw: "#268bd2" },
-    { id: "one-dark", label: "ون دارك", sw: "#61afef" }
+    { id: "everforest", label: "إيفر فورست", sw: "#a7c080" },
+    { id: "rose-pine", label: "روز باين", sw: "#ebbcba" },
+    { id: "ayu", label: "آيو", sw: "#ff8f40" },
+    { id: "kanagawa", label: "كاناجاوا", sw: "#d27e99" }
   ];
   var FONT_SCALES = ["small", "medium", "large"];
   var FONT_LABELS = { small: "صغير", medium: "متوسط", large: "كبير" };
