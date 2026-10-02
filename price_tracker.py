@@ -150,7 +150,7 @@ SLOW_AFTER_SEC = 45  # a site slower than this gets an amber status dot
 # never reads the installed version from the registry: the registry can hold a
 # newer one after an update, and a mismatch there would make the button offer
 # the same build forever.
-APP_VERSION = "1.2.9"
+APP_VERSION = "1.2.10"
 # A manifest file served over HTTPS. Two lines:
 #
 #   1.1.0
