@@ -75,6 +75,96 @@ Optional keys: `paginate` (`{"param": "page", "max_pages": 5}`),
 `page_delay`, `refresh_sec`, `coupon_badge`, `detail_pages`, `detail_cap`,
 `use_playwright`.
 
+### Adding a store from its URL
+
+The Data Sources page (مصادر البيانات) can add a store the user has never
+configured: they paste the shop's link and the app works out how to read it.
+Pasting either the home page or a working search URL works — a search URL is
+easier, because the hard part (the path) is then already supplied.
+
+1. **Find the search URL.** The store's own search form is read first, because
+   that is where the parameter name is written down. `miamicenters.com` 404s on
+   every conventional pattern (`?q=`, `/search?q=`, `/catalogsearch/result/?q=`)
+   and answers on `?s=`, which nothing in the markup would have revealed. The
+   conventional patterns follow, for stores that ship no form. Up to
+   `_MAX_SEARCH_PROBES` requests, with a short pause between each.
+
+   A WordPress storefront needs the product filter as well: bare `?s=iphone`
+   matches every post type and returns blog posts with no prices in them, while
+   `?s=iphone&post_type=product` returns the listing. The form's other params
+   are carried over, which is how that filter is picked up.
+2. **Find how the results paginate.** Page one is not the answer — it is the
+   difference between 12 products and 598. The count and the *style* are read
+   off the result page's own pager: WordPress permalinks put the number in the
+   path (`/ar/page/2/`) while Shopify uses `?page=2`, and guessing the wrong one
+   is invisible — every request answers with page 1 again and the search
+   reports a full-looking result. Auto-detected walks are capped at
+   `_MAX_AUTO_PAGES`.
+
+   **`"max_pages": 0` means unlimited.** The walk then ends on evidence rather
+   than on a number: two pages in a row adding nothing new, which is what every
+   store does at the end of its results, plus a 404 past the last page. Note
+   that a 404 past the end now ends the walk *with what was collected* rather
+   than discarding the whole scrape — an unbounded walk always asks for one page
+   too many, and 598 good rows should not be lost over page 51.
+2. **Guess the selectors.** The listing is the markup structure that repeats on
+   the page and carries both a price and a product link, so card candidates are
+   ranked on exactly that. Within a card, the title, prices and link are read
+   the same way.
+3. **Verify by parsing.** Each candidate goes through `_parse_cards` — the same
+   code a real search uses — and must produce a believable listing: several
+   rows, each with its own distinct link, a title, and prices that add up. Up
+   to `_MAX_SELECTOR_TRIES` candidates are tried against the page already in
+   hand; nothing is re-requested, because this loop repairs *our* guess, it does
+   not ask the store again.
+4. **Check the keyword is real.** The winning URL is requested once with a word
+   no shop stocks. A page returning the same listing for nonsense is rejected:
+   adding it would look healthy while answering every future search identically.
+5. **Save atomically.** The entry is appended to `sites.json` through a temp
+   file and `os.replace`, so an interrupted write cannot leave a store list that
+   fails to parse — which would take every configured store down, not just the
+   new one.
+
+A store already present is refused **by host**, not by name. The discovered name
+is the domain while an existing entry carries whatever its owner called it
+("2B Egypt"), so matching on name alone would add 2B a second time and show
+every product twice.
+
+**A store that blocks extraction is reported, not retried.** The probe stops at
+the first bot checkpoint (Cloudflare, Vercel BotID — see `looks_like_checkpoint`)
+and says so in Arabic, for the reason `fetch_html` already documents: asking a
+store that has blocked you again only deepens the block. Likewise a listing that
+only exists after JavaScript runs — there is no honest way to read it over plain
+HTTP, so the message says results were not found rather than retrying a page
+that will never answer. This is a deliberate limit: a loop that retries until a
+block lifts cannot converge (a challenge needs real JS execution and a browser
+fingerprint, not more HTTP requests), and its only remaining function would be
+circumventing an access control the store's owner put in place.
+
+**Two things worth not undoing:**
+
+- **A price must be a leaf.** 2B renders the compare-at and the current price as
+  `span.price` *in the same card*, separated only by `.old-price` and
+  `.special-price` wrappers. A selector naming the price container matches both,
+  and `parse_price` takes the first number — always the higher — so every
+  discounted product would silently report its pre-discount price.
+  `_is_price_leaf` and `_price_path` exist for exactly this.
+- **`parse_price` folds Arabic-Indic digits and Arabic separators** (`٬` U+066C,
+  `٫` U+066B). 2B's Arabic pages write "٦٧٬٧٩٩ ج.م."; without the fold that
+  reads as `67.0` instead of `67799.0` — wrong by a factor of a thousand, with
+  nothing reporting an error.
+- **A price is not a number with words attached.** `dream2000`'s title link
+  reads "أبل آيفون 15" and `parse_price` returns 15 from the tail of it, so an
+  iPhone 15 priced at £69,400 was showing as 15. `_looks_pricey` requires the
+  text to be digits, separators and a currency mark; a category tile reading
+  "1035 products" is rejected the same way.
+- **A link is not an action.** `miamicenters`' add-to-cart button is an `<a>`
+  whose href is `…?add-to-cart=<id>` on some pages and a real product URL on
+  others, so a selector built from it collapsed 598 products to 460 — every card
+  past the 38th page resolved to the same address and was dropped as a
+  duplicate. `_usable_href` rejects action-only hrefs, and the image link
+  (`/product/<slug>`) is what a card's real link is read from.
+
 ## Building a release
 
 ```bat

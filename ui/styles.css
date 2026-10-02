@@ -1309,6 +1309,22 @@ input[type="checkbox"]:disabled { opacity: 0.4; cursor: default; }
 
 /* sources table */
 .sites-search { display: flex; align-items: center; gap: var(--space-sm); margin-bottom: var(--space-md); }
+
+/* "Add a store by URL" sits above the stores table as its own card, so the
+   table stays visible underneath while a probe runs. */
+.add-store { margin-bottom: var(--space-md); }
+/* The URL is LTR even in an RTL page: a store address is read left to right,
+   and dir="ltr" on the input keeps the scheme and host from being mirrored. */
+.add-store input { direction: ltr; text-align: left; }
+.add-store-msg {
+  margin: var(--space-sm) 0 0;
+  font-size: var(--type-sm);
+  color: var(--on-surface-variant);
+}
+/* Failures are worded as a plain Arabic sentence, so they are shown in the
+   same body tone as the rest of the page; only the state is colour-coded. */
+.add-store-msg.is-ok { color: var(--secondary); }
+.add-store-msg.is-error { color: var(--error); }
 .table-wrap.slim { max-height: none; }
 .site-badge {
   width: 28px; height: 28px;

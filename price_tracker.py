@@ -30,6 +30,7 @@ import webbrowser
 from datetime import datetime
 from urllib.parse import quote_plus
 from urllib.parse import urljoin
+from urllib.parse import urlparse
 
 import requests
 import requests.adapters
@@ -222,6 +223,14 @@ DEFAULT_EXCLUDE_WORDS = (
 
 _AR_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
 
+# Arabic decimal punctuation, which is not ASCII and so is invisible to the
+# digit regex below. 2B's Arabic pages write a price as "٦٧٬٧٩٩ ج.م." with
+# U+066C ARABIC THOUSANDS SEPARATOR and U+066B ARABIC DECIMAL SEPARATOR, and
+# without folding these the match stops at the first digit group: that reads as
+# 67.0 instead of 67799.0 - a price wrong by a factor of a thousand, with no
+# error anywhere to notice it.
+_AR_SEPARATORS = str.maketrans("٫٬", ".,")
+
 # Last Playwright browser channel that worked ("msedge"/"chrome"/"chromium").
 LAST_BROWSER_CHANNEL = None
 
@@ -347,6 +356,10 @@ def fmt_price(v):
 
 
 def parse_price(text):
+    # Both folds have to happen before the match: Arabic-Indic digits and the
+    # Arabic thousands/decimal separators together, or the number is read as
+    # its first two digits.
+    text = (text or "").translate(_AR_DIGITS).translate(_AR_SEPARATORS)
     text = text.replace("\xa0", " ")
     m = re.search(r"\d[\d,\.\s]*", text)
     if not m:
@@ -1200,19 +1213,166 @@ def paginated_urls(site, url):
     Vercel, 16 cards per page, `?page=N`) hands over the whole list without a
     browser. Walking those pages replaces the old scroll-and-wait loop, so the
     search no longer needs a real browser at all.
+
+    Two page-number styles, because stores disagree:
+
+    - `"param": "page"` appends `?page=N` (Dubai Phone).
+    - `"path": "/page/{n}/"` inserts the number into the path itself, which is
+      what WordPress permalinks do (miamicenters: `/ar/page/2/?s=iphone`). A
+      `?page=` guess against such a site silently returns page 1 again for every
+      page - the search "succeeds" and reports twelve products out of six
+      hundred - because the unknown param is simply ignored.
+
+    `"max_pages": 0` means unlimited. The walk then ends on the evidence rather
+    than on a number: two consecutive pages that add nothing new, which is what
+    every store does at the end of its results (miamicenters repeats its last
+    page past 50, so the tail stops itself). _MAX_UNBOUNDED_PAGES still exists
+    as a backstop against a store whose page numbers never end - a site that
+    serves a fresh listing for every /page/N/ forever would otherwise walk
+    until the user closed the app, one request at a time, at someone else's
+    expense.
     """
     pages = site.get("paginate") or site.get("pages") or {}
     if not isinstance(pages, dict) or not pages:
         return [url]
     try:
-        max_pages = int(pages.get("max_pages") or 1)
+        max_pages = int(pages.get("max_pages", 1) or 0)
     except (TypeError, ValueError):
         max_pages = 1
+    if max_pages <= 0:
+        max_pages = _MAX_UNBOUNDED_PAGES
+
+    # Path style first: the template has to win over any param, because a path
+    # page number is the only thing this store reads.
+    template = pages.get("path") or pages.get("path_template")
+    if template:
+        stem = str(template)
+        if "{n}" not in stem and "{page}" not in stem:
+            stem = stem.rstrip("/") + "/{n}/"
+        out = []
+        for i in range(1, max_pages + 1):
+            page = stem.replace("{n}", str(i)).replace("{page}", str(i))
+            # Every page must carry the search itself. The template replaces the
+            # path, so the original query string is appended or merged: dropping
+            # it would fetch the store's generic /page/N/ and come back with a
+            # listing for no keyword at all.
+            query = ""
+            if "?" in url:
+                query = url.split("?", 1)[1]
+            if not query:
+                continue        # nothing to search for; walk only this page
+            joined = urljoin(url, page)
+            out.append("%s?%s" % (joined, query) if "?" not in joined
+                       else "%s&%s" % (joined, query))
+        # Page 1 is the store's own first result URL, which usually is not
+        # /page/1/ even when the rest of the walk is /page/N/.
+        return [url] + out[1:] if out else [url]
+
     param = str(pages.get("param") or "page")
     sep = "&" if "?" in url else "?"
     # First page is the bare search URL (it carries no ?page=), then 2..N.
     return [url] + ["%s%s%s=%d" % (url, sep, param, i)
                     for i in range(2, max_pages + 1)]
+
+
+def detect_page_path(soup, final_url):
+    """The path template this site's page links use, or None.
+
+    Read off the result page's own pagination, which is the only place the store
+    states how its pages are addressed. WordPress permalinks insert the number
+    into the path (`/ar/page/2/`); a `?page=2` guess against such a site is
+    ignored and hands back page 1 again, so the search reports a dozen products
+    out of six hundred and looks like it worked.
+
+    Only a number *inside the path* is accepted. `?page=2` is the query style and
+    needs no template - it is what paginated_urls already builds.
+    """
+    best = None
+    for a in soup.select("a[href]"):
+        label = a.get_text(strip=True)
+        if not label.isdigit():
+            continue
+        try:
+            n = int(label)
+        except ValueError:
+            continue
+        if not 2 <= n <= 500:
+            continue
+        href = (a.get("href") or "").strip()
+        if not href:
+            continue
+        path = urlparse(urljoin(final_url, href)).path
+        if not re.search(r"(?<!\d)%d(?!\d)" % n, path):
+            continue
+        template = re.sub(r"(?<!\d)%d(?!\d)" % n, "{n}", path, count=1)
+        if best is None or n > best[1]:
+            best = (template, n)
+    return best[0] if best else None
+
+
+def detect_page_param(soup, final_url):
+    """The query parameter this site's page links use, or None.
+
+    The counterpart to detect_page_path. Shopify links pages as `?page=2`, which
+    paginated_urls can already build - but only when the config says so, and
+    nothing says so for a store the user pasted a link for. Read off the pager
+    so the query style is detected rather than assumed to be the path style.
+    """
+    best = None
+    for a in soup.select("a[href]"):
+        label = a.get_text(strip=True)
+        if not label.isdigit():
+            continue
+        try:
+            n = int(label)
+        except ValueError:
+            continue
+        if not 2 <= n <= 500:
+            continue
+        query = urlparse(urljoin(final_url, a.get("href") or "")).query
+        if not query:
+            continue
+        for pair in query.split("&"):
+            key, _, value = pair.partition("=")
+            if value.isdigit() and 2 <= int(value) <= 500:
+                if best is None or int(value) > best[1]:
+                    best = (key, int(value))
+    return best[0] if best else None
+
+
+def detect_pagination(site, url, html):
+    """How many result pages this listing has, read off its own pagination.
+
+    Best-effort, and it never invents a number: an empty result means
+    "single page" or "cannot tell", and the caller keeps the conservative
+    default. A discovered count is capped by whatever the site was configured
+    with, because walking 50 pages of someone's server on every refresh is not a
+    decision this function gets to make silently.
+    """
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+    except Exception:
+        return None
+    nums = []
+    last_number = None
+    for a in soup.select("a[href]"):
+        label = a.get_text(strip=True)
+        if label.isdigit():
+            try:
+                n = int(label)
+            except ValueError:
+                continue
+            if 1 < n <= 500:
+                nums.append(n)
+                last_number = max(last_number or 0, n)
+    if not nums:
+        return None
+    # The highest numbered link is the page count, not a page to walk *to*: a
+    # listing of 50 pages ends with "50" as its last entry, and asking for
+    # /page/51/ is a 404. miamicenters advertises 50 and starts at 1, so the
+    # count is 50 pages.
+    found = last_number
+    return max(1, found)
 
 
 def scrape_site(site, query, progress=None, enrich=True):
@@ -1229,17 +1389,64 @@ def scrape_site(site, query, progress=None, enrich=True):
     url = site["search_url"].replace("{q}", quote_plus(query))
     pages = paginated_urls(site, url)
     delay = page_delay_range(site)
+    if site.get("autopaginate") and len(pages) == 1:
+        # The page number was not configured, so the count is read off the first
+        # result page's own pagination and the walk is extended to match. Capped
+        # by max_pages so one search cannot walk an unbounded number of pages.
+        with PERF.stage("paginate:detect", name):
+            first_html, first_final = fetch_html(
+                url, use_playwright=site.get("use_playwright", False), site_key=key)
+        soup = BeautifulSoup(first_html, "html.parser")
+        found = detect_pagination(site, url, first_html)
+        template = (detect_page_path(soup, first_final)
+                    if found and found > 1 else None)
+        if found and found > 1:
+            cap = min(found, _MAX_AUTO_PAGES)
+            configured = (site.get("paginate") or {}).get("max_pages")
+            if configured:
+                # An explicit limit in the config wins over what the page shows.
+                try:
+                    cap = min(cap, max(1, int(configured)))
+                except (TypeError, ValueError):
+                    pass
+            if template:
+                page_rule = {"path": template, "max_pages": cap}
+            else:
+                page_rule = {"param": detect_page_param(soup, first_final) or "page",
+                             "max_pages": cap}
+            pages = paginated_urls(dict(site, paginate=page_rule), url)
+            PERF.note("%s: %d result pages%s, walking %d"
+                      % (name, found,
+                         " at %s" % template if template
+                         else " via ?%s=" % page_rule.get("param"), cap))
     rows, seen, empty_pages = [], set(), 0
     for i, page_url in enumerate(pages):
         if i:
             time.sleep(random.uniform(*delay))
         stage = "fetch:search-page" if i == 0 else "fetch:page%d" % (i + 1)
         with PERF.stage(stage, name):
-            html, final_url = fetch_html(
-                page_url, use_playwright=site.get("use_playwright", False),
-                wait_selector=site.get("wait_selector"),
-                scroll_selector=site.get("scroll_selector"),
-                max_scrolls=site.get("max_scrolls", 0), site_key=key)
+            try:
+                html, final_url = fetch_html(
+                    page_url, use_playwright=site.get("use_playwright", False),
+                    wait_selector=site.get("wait_selector"),
+                    scroll_selector=site.get("scroll_selector"),
+                    max_scrolls=site.get("max_scrolls", 0), site_key=key)
+            except CheckpointError:
+                raise
+            except Exception:
+                # Past the last page a store answers with a 404 rather than an
+                # empty listing, and an unbounded walk always asks for one page
+                # too many. Everything collected so far is still good, so the
+                # walk ends here instead of discarding 598 rows over a 404 on
+                # page 51. Only page 1 is fatal: that is the page the whole
+                # store rests on, and the caller reports its failure.
+                if i == 0:
+                    raise
+                logging.info("%s: %s failed, stopping the walk",
+                             name, page_url)
+                PERF.note("%s: page %d failed (%s), stopping"
+                          % (name, i + 1, type(Exception).__name__))
+                break
         with PERF.stage("parse", name):
             fresh = []
             for r in _parse_cards(site, html, final_url):
@@ -1261,7 +1468,14 @@ def scrape_site(site, query, progress=None, enrich=True):
         else:
             empty_pages = 0
         if progress and len(pages) > 1 and i + 1 < len(pages):
-            progress("جاري جلب المنتجات (%d/%d)..." % (i + 2, len(pages)))
+            # An unbounded walk has no real total to count towards, so it counts
+            # up and reports what it has. Otherwise this reads "2/400" while the
+            # store actually holds 50 pages, which looks like a hang.
+            if len(pages) >= _MAX_UNBOUNDED_PAGES:
+                progress("جاري جلب المنتجات… (%d صفحة، %d منتج)"
+                         % (i + 1, len(rows)))
+            else:
+                progress("جاري جلب المنتجات (%d/%d)..." % (i + 2, len(pages)))
     if not rows:
         PERF.note("%s: page had no product cards" % name)
     if enrich and site.get("detail_pages"):
@@ -1429,6 +1643,1105 @@ def load_sites():
         return [], "ملف sites.json غير صالح (ليست بيانات JSON سليمة). يُرجى مراجعة الملف والمحاولة مرة أخرى."
 
 
+# ---------------------------------------------------------------------------
+# Adding a store from its URL
+# ---------------------------------------------------------------------------
+# The Sources page can add a shop the user has never configured: they paste the
+# store's link and the app works out how to read it. Two things have to be
+# guessed from the page itself - the search URL and the per-card selectors -
+# and both guesses are checked against real HTML before anything is written to
+# sites.json. A store that will not serve its results at all (a bot checkpoint,
+# or a listing that only exists after JavaScript runs) is reported in plain
+# Arabic rather than retried, for the reason fetch_html already documents:
+# asking a store that has blocked you again only deepens the block.
+
+# A word nearly every phone shop stocks, so "does this search URL work?" can be
+# answered by whether the page it produces lists anything at all.
+_PROBE_QUERY = "iphone"
+
+# Search URLs to try, conventional first. _MAX_SEARCH_PROBES is the cap on how
+# many times the probe touches the store: each one is a real request against
+# someone's server, so the list is short and its order matters more than its
+# length. Two stores already in sites.json use `?q=` (2B Egypt) and `?q=` with
+# `?page=` (Dubai Phone), which is why `?q=` leads.
+_SEARCH_URL_PATTERNS = (
+    "?q={q}",
+    "/search?q={q}",
+    "?search={q}",
+    "?s={q}",
+    "/search/{q}",
+    # Magento is what 2B Egypt runs (its own path is
+    # /en/catalogsearch/result/?q=) and WooCommerce is the other platform
+    # common among local shops; both are one guess away from the ?q= above.
+    "/catalogsearch/result/?q={q}",
+    "?post_type=product&s={q}",
+    "?keyword={q}",
+    "?query={q}",
+    "?search_query={q}",
+    "?text={q}",
+    "?find={q}",
+    "?searchkey={q}",
+    "?term={q}",
+    # WordPress storefronts (WooCommerce, and the Elementor-based themes like
+    # miamicenters) match every post type by default, so `?s=iphone` returns
+    # blog posts as well as products and the page has no prices in it at all.
+    # The product filter is what turns the same URL into a listing. Both spellings
+    # are tried because either the param or the type varies by theme.
+    "?s={q}&post_type=product",
+    "?post_type=product&q={q}",
+    "?s={q}&product_cat=all",
+)
+
+# Search parameters a theme is likely to accept, read off the site's own search
+# form. A storefront nearly always ships one, and it is the only reliable source
+# for the parameter name: miamicenters 404s on `?q=` and `/search?q=` and works
+# on `?s=`, which nothing about the markup would have revealed.
+_FORM_SEARCH_NAMES = ("q", "s", "search", "keyword", "query", "term",
+                      "searchkey", "search_query", "find", "text",
+                      "product_search", "pq")
+_MAX_SEARCH_PROBES = 10
+
+# How many ranked card sets to try against the one page that did answer. This
+# is the "keep going until it parses" loop and it is bounded on purpose: it
+# walks candidates for the HTML already in hand, it never re-requests the store
+# hoping the block lifts. The cost is parsing a page already fetched, so this
+# bound is about picking a clear winner rather than about being polite - the
+# request budget is _MAX_SEARCH_PROBES.
+_MAX_SELECTOR_TRIES = 8
+
+# Fewer repeats than this is a banner or a promo strip, not a product listing.
+_MIN_CARDS = 3
+
+# Tags that are never a product card but do repeat all over a shop page, so
+# they are skipped when a card set is being guessed.
+_NEVER_CARD = {"html", "head", "body", "script", "style", "nav", "header",
+               "footer", "form", "option", "svg", "path", "noscript", "iframe"}
+
+# Ceiling for an automatically discovered page walk. A search that reads 50
+# result pages is already heavy on someone else's server; this is here so a
+# store advertising 500 pages cannot turn one refresh into 500 requests.
+_MAX_AUTO_PAGES = 50
+
+# Backstop for "max_pages": 0 (unlimited). The walk is meant to stop on evidence
+# - two pages in a row adding nothing new - and every store does that at the end
+# of its results. This only catches the pathological case: a site that serves a
+# genuinely different listing at every page number forever, where no evidence
+# ever arrives and the walk would run until the user closed the app.
+_MAX_UNBOUNDED_PAGES = 400
+
+# A class has to be usable in a selector verbatim; storefronts emit hashed or
+# colon-separated names that soupsieve cannot take unescaped.
+_CLASS_OK = re.compile(r"^[A-Za-z_][A-Za-z0-9_\-]*$")
+
+# Class fragments that name a price, used to rank a card's inner elements.
+_PRICE_HINT = ("price", "cost", "amount", "sekkah", "sar", "egp", "total")
+_TITLE_HINT = ("title", "name", "heading", "product-name")
+
+# Class fragments that name the block itself. A class carrying one of these is
+# the one worth keeping in a stored selector; the rest are utility classes
+# (flex, w-full, border-solid) that a redesign reorders for no reason.
+_CARD_HINT = ("product", "card", "item", "tile", "result", "listing",
+              "offer", "entry")
+
+
+def _sig_selectors(sig):
+    """CSS selectors for a signature, narrowest-that-is-still-meaningful first.
+
+    A generated selector is written into sites.json, which the README calls out
+    as the file a user edits to add a store by hand. So the selector has to be
+    readable and has to survive a later redesign. Dubai Phone's real card
+    carries eleven classes and the guesser can technically name all of them,
+    but `article.nf-product-card` is what a person would have written, and it
+    still matches after the site drops `cursor-pointer` from the card.
+    """
+    name, classes = sig
+    usable = [c for c in classes if _CLASS_OK.match(c)]
+    if classes and not usable:
+        return []
+    if not usable:
+        # A block with no class at all can only be named by its tag.
+        return [name]
+    semantic = [c for c in usable if any(h in c.lower() for h in _CARD_HINT)]
+    # Longest first: "product-item" narrows further than "item", and it is the
+    # one that stays true when a site also puts "item" on unrelated rows.
+    out = ["%s.%s" % (name, c) for c in sorted(semantic, key=len, reverse=True)[:2]]
+    if len(usable) <= 3:
+        out.append("%s.%s" % (name, ".".join(usable)))
+    else:
+        out.append("%s.%s" % (
+            name, ".".join(sorted(usable, key=len, reverse=True)[:2])))
+    out.append("%s.%s" % (name, ".".join(usable)))
+    seen, ordered = set(), []
+    for s in out:
+        if s not in seen:
+            seen.add(s)
+            ordered.append(s)
+    return ordered
+
+
+def _sig_selector(sig):
+    """The one selector to use for a signature: the narrowest readable one."""
+    options = _sig_selectors(sig)
+    return options[0] if options else None
+
+# Three or more digits in a row, with thousands separators allowed: the shape of
+# a phone price, and a poor match for a year or a review count.
+_NUMERIC = re.compile(r"\d[\d,  .]{2,}")
+
+# What may sit next to the digits and still leave a price a price.
+_CURRENCY_MARKS = "ج.م.£$€¥₹EGPUSDGBPUSDجنيهريالدرهمدولار"
+
+
+def normalize_store_url(raw):
+    """The pasted link as a plain http(s) base URL, or None if it cannot be one.
+
+    Everything after the host is dropped: this returns the address the search
+    URL patterns are hung off, not a page of the store.
+    """
+    u = (raw or "").strip().strip('"').strip("'").strip()
+    if not u:
+        return None
+    if not re.match(r"^[A-Za-z][A-Za-z0-9+.\-]*://", u):
+        # Bare "store.com/..." is what people actually paste; https first so a
+        # store that has no plain http gets a plain "works" instead of a
+        # redirect the probe would have to follow to notice.
+        u = "https://" + u
+    try:
+        p = urlparse(u)
+    except ValueError:
+        return None
+    if p.scheme not in ("http", "https") or not p.hostname:
+        return None
+    if "." not in p.hostname and p.hostname != "localhost":
+        # Not a store address. Refusing here keeps the probe from being aimed
+        # at whatever single-label host the machine happens to resolve.
+        return None
+    # The path is kept exactly as written, trailing slash included: Magento
+    # routes on that slash (2B's /en/catalogsearch/result/ 404s without it), and
+    # someone who pasted a working search URL has already handed us the part
+    # that is hard to guess.
+    return "%s://%s%s" % (p.scheme, p.netloc, p.path or "")
+
+
+def _join(base, pattern):
+    """Attach a search pattern to a base URL.
+
+    A pattern starting with `?` is appended as-is so the base keeps the slash
+    the store may route on. A pattern starting with `/` brings its own, so any
+    trailing slash on the base is dropped first and the two never double up.
+
+    A pattern that is already a whole URL - which is what the site's own search
+    form produces - is used exactly as the form spelled it. Rewriting one to
+    look like a relative pattern would edit an address that was just verified
+    to work.
+    """
+    if "://" in pattern:
+        return pattern
+    if pattern.startswith("?"):
+        return base + pattern
+    return base.rstrip("/") + pattern
+
+
+def _sig(el):
+    """(tag, classes) identity used to recognise the same block twice."""
+    return (el.name, tuple(sorted(el.get("class") or [])))
+
+
+def _sig_selector(sig):
+    """CSS selector for a signature, or None when its classes cannot be typed."""
+    name, classes = sig
+    usable = [c for c in classes if _CLASS_OK.match(c)]
+    if classes and not usable:
+        return None
+    return name + "".join("." + c for c in usable)
+
+
+def _looks_pricey(el):
+    """Whether this element's text is shaped like a price.
+
+    A price is digits, separators, and a currency mark. A product name is digits
+    with words attached - "أبل آيفون 15", "iPhone 16 Pro" - and parse_price will
+    happily return 15 from the tail of it, so text carrying letters between or
+    around the digits is not a price. Currency words and the Arabic currency
+    mark are the exception: "15,500 ج.م" and "$15,500" are prices.
+    """
+    cls = " ".join(el.get("class") or []).lower()
+    if el.get("data-price") is not None or el.get("itemprop") == "price":
+        return True
+    text = el.get_text(" ", strip=True)
+    if not _NUMERIC.search(text) or len(text) >= 40:
+        return False
+    # Strip the parts that legitimately accompany a number, then see whether
+    # anything word-like is left.
+    bare = text
+    for a, b in (("\xa0", " "), ("٬", ","), ("٫", ".")):
+        bare = bare.replace(a, b)
+    # Digits first: "١٥٬٥٠٠" is a price, and only then is the currency stripped.
+    bare = bare.translate(_AR_DIGITS)
+    bare = re.sub(r"[\d,\.\s]", "", bare)
+    bare = bare.strip(_CURRENCY_MARKS)
+    if not bare:
+        return True          # a bare number: 57770
+    # Left with letters or words: a name with a number in it, not a price.
+    return any(h in cls for h in _PRICE_HINT) and len(bare) <= 2
+
+
+def _card_link(card):
+    """The card's product link, or "" when it has none worth following.
+
+    Looks at the card's own anchors first, then at a wrapping anchor. That
+    second case is not a rarity: Dubai Phone renders `<a href="/shop/...">`
+    around each `<article class="nf-product-card">`, so the card element itself
+    contains no link at all. _parse_cards already falls back to the parent
+    anchor for exactly this markup, and a guesser that cannot see it scores
+    that card as valueless and throws away a perfect listing.
+    """
+    for a in card.find_all("a", href=True):
+        href = _usable_href(a)
+        if href:
+            return href
+    parent_a = card.find_parent("a", href=True)
+    if parent_a is not None:
+        return _usable_href(parent_a)
+    return ""
+
+
+def _card_signature_groups(soup):
+    """Every repeated block of markup on the page, as (sig, [elements]).
+
+    A product listing is the only part of a shop page where one structure shows
+    up several times side by side, so a signature appearing _MIN_CARDS times is
+    the starting point. Groups that nest inside their own kind are dropped: a
+    wrapper around the grid matches the same selector as the cards inside it and
+    would parse into one row per product instead of one row per listing.
+    """
+    groups = {}
+    for el in soup.find_all(True):
+        if el.name in _NEVER_CARD:
+            continue
+        groups.setdefault(_sig(el), []).append(el)
+    out = []
+    for sig, els in groups.items():
+        if len(els) < _MIN_CARDS:
+            continue
+        if _sig_selector(sig) is None:
+            continue
+        # Nested: at least one of these elements contains another of the same
+        # kind, so the selector is pointing at a wrapper.
+        if any(other is not el for el in els for other in el.find_all(True)
+               if _sig(other) == sig):
+            continue
+        out.append((sig, els))
+    return out
+
+
+def rank_card_selectors(soup, limit=_MAX_SELECTOR_TRIES):
+    """Candidate `item` selectors, best first.
+
+    Ranked on how many of the repeating blocks carry both a price and a
+    product link, which is what tells a listing apart from a nav bar, a
+    footer, or a carousel of promo banners - all of which repeat just as often.
+
+    Two filters keep the list short enough that _MAX_SELECTOR_TRIES still
+    covers a real listing. A block has to be *mostly* cards, or `div` wins on
+    raw count by matching half the page; and a selector with no class in it is
+    demoted hard, because `div` keeps matching every card until the site is
+    redesigned and then quietly stops being right.
+    """
+    scored = []
+    for sig, els in _card_signature_groups(soup):
+        # Walk the group's selectors narrowest-first and keep the first that
+        # still explains enough of the page. `article.nf-product-card` beats the
+        # eleven-class version that names the same 16 elements, and both are
+        # tried so a class that turned out to be too generic simply falls
+        # through to the next.
+        for sel in _sig_selectors(sig):
+            try:
+                cards = soup.select(sel)
+            except Exception:
+                continue
+            if len(cards) < _MIN_CARDS:
+                continue
+            good = sum(1 for c in cards
+                       if _card_link(c) and any(_looks_pricey(d)
+                                                for d in c.find_all(True)))
+            if not good or good < _MIN_CARDS:
+                continue
+            if good / float(len(cards)) < 0.35:
+                # Matches far more than it explains: a wrapper, or a bare tag
+                # catching the page as well as the listing.
+                break
+            # A block of category tiles parses into rows as cleanly as a product
+            # listing does, and the tile's "1035 products" count reads exactly
+            # like a price. When the price-shaped text names what it is counting
+            # rather than money, this is not a product listing.
+            money = sum(1 for c in cards
+                        if any(_looks_pricey(d) and _price_looks_currency(d)
+                               for d in c.find_all(True)))
+            if money < len(cards) * 0.5:
+                continue
+            named = 1.0 + 0.15 * min(len(sig[1]), 3)
+            if not sig[1]:
+                named = 0.6
+            # <article> and <li> are what a listing is almost always made of,
+            # so they win a tie against a <div> that happens to score the same.
+            if sig[0] in ("article", "li"):
+                named += 0.2
+            scored.append((good * named, sel))
+            break  # the narrowest selector for this group is the one stored
+    scored.sort(key=lambda t: -t[0])
+    seen, out = set(), []
+    for _score, sel in scored:
+        if sel in seen:
+            continue
+        seen.add(sel)
+        out.append(sel)
+    return out[:limit]
+
+
+# A class fragment naming the price the customer actually pays. "price" itself
+# is deliberately absent: it is in _PRICE_HINT, and here it would match both
+# sides of a pair, at which point the shorter spelling wins and the compare-at
+# gets read as the price now.
+_NOW_HINT = ("special", "now-price", "nowprice", "sale-price", "final-price",
+             "current-price", "discount-price")
+# ...and one naming the price it replaced.
+_OLD_HINT = ("old", "was", "regular", "compare", "before", "list", "rrp",
+             "struck", "del")
+
+
+def _is_price_leaf(el):
+    """Whether this element holds exactly one price and wraps no other.
+
+    The single most important rule in this guesser. A Magento price block is
+    `<span class="price-container price-final_price"><span class="old-price"><span class="price">95,999</span></span><span class="special-price"><span class="price">69,999</span></span></span>`,
+    so the outer element is pricey and holds two numbers - and parse_price
+    takes the first, which is always the higher, struck-through one. Guessing
+    that container yields the pre-discount price for every product with no
+    visible error. Only a leaf can be read as one price.
+    """
+    if not _looks_pricey(el):
+        return False
+    for d in el.find_all(True):
+        if d is not el and _looks_pricey(d):
+            return False
+    return True
+
+
+def _price_path(card, el, siblings):
+    """A selector reaching this one price and not the others on the card.
+
+    Two prices on one card can be the same tag carrying the same classes: 2B
+    renders the compare-at and the current price as `span.price` in both
+    cases, inside the same `.price-wrapper`, under the same
+    `.price-final_price`. Nothing about the element or its ancestry reads as
+    "old" except the `.old-price` wrapper, and climbing cannot find it by name
+    because every ancestor in between looks identical for both prices.
+
+    So the criterion is not "which ancestor sounds like a price" but "which
+    ancestor separates this element from the other price". The first ancestor
+    where the card's selector resolves to exactly one of the price elements is
+    the one that names which price this is, and `.old-price span.price` /
+    `.special-price span.price` fall out of it directly. Left unqualified, the
+    selector matches both and takes the first, which is always the higher -
+    every discounted product silently reporting its pre-discount price.
+    """
+    own = _sig_selector(_sig(el))
+    if not own:
+        return ""
+    others = [o for o in siblings if o is not el]
+    node = el.parent
+    while node is not None and node.name not in _NEVER_CARD:
+        for cand in _sig_selectors(_sig(node)):
+            if "." not in cand:
+                continue
+            path = "%s %s" % (cand, own)
+            try:
+                hit = card.select_one(path)
+            except Exception:
+                continue
+            # Separates this price from every other one on the card.
+            if hit is el and not any(other in card.select(path)
+                                     for other in others):
+                return path
+        node = node.parent
+    return own
+
+
+def _price_groups(cards, min_ratio=0.5):
+    """Every repeated single-price element inside the cards, with its median.
+
+    The median is what tells current from compare-at without trusting class
+    names: on a discounted listing the current price is the lower of the two.
+    """
+    counts = {}
+    for card in cards:
+        leaves = [el for el in card.find_all(True) if _is_price_leaf(el)]
+        local = set()
+        for el in leaves:
+            s = _price_path(card, el, leaves)
+            if s:
+                local.add(s)
+        for s in local:
+            counts[s] = counts.get(s, 0) + 1
+    need = max(1, int(len(cards) * min_ratio))
+    groups = []
+    for s, n in counts.items():
+        if n < need:
+            continue
+        vals = []
+        for card in cards:
+            el = card.select_one(s)
+            if el is None:
+                continue
+            v = parse_price(el.get_text(" ", strip=True))
+            if v and v > 0:
+                vals.append(v)
+        if not vals:
+            continue
+        groups.append({"sel": s, "count": n, "median": statistics.median(vals)})
+    return groups
+
+
+def _pick_prices(cards):
+    """(price_now, price_old) selectors for these cards.
+
+    A product name is not a price. On dream2000 the card's title link reads
+    "أبل آيفون 15", and `parse_price` takes the trailing digits as 15.0 - so a
+    title that ends in a model number becomes a price of fifteen pounds. Any
+    candidate whose text carries letters alongside the digits is dropped before
+    the values are compared, which is what keeps "iPhone 15" out of the price
+    slot while a real "15,500 ج.م" stays in it.
+
+    Class names decide it when they say so, and the price values decide it when
+    they do not: with two price elements on every card the lower one is what
+    the customer pays. Emptiness is a legitimate answer - a store with one
+    price per product has no compare-at, and inventing one out of a rating or
+    an instalment figure is worse than leaving it out.
+    """
+    groups = _price_groups(cards)
+    if not groups:
+        return "", ""
+
+    def named(hints, used):
+        # Most repeated first, then the shortest spelling, so `.price` beats
+        # `.price-wrapper .price` when a card has both.
+        cands = [g for g in groups if g["sel"] not in used]
+        cands.sort(key=lambda g: (-g["count"], len(g["sel"])))
+        for g in cands:
+            if any(h in g["sel"].lower() for h in hints):
+                return g
+        return None
+
+    # Class names decide it when they say so: on 2B the two price selectors are
+    # `.old-price span.price` and `.special-price span.price`, and "old" belongs
+    # to the compare-at, not to the price now. Matching on the whole selector
+    # string rather than on the element's own class is what keeps "old" from
+    # being read as part of "price_old".
+    now = named(_NOW_HINT, ())
+    old = named(_OLD_HINT, (now["sel"],) if now else ())
+    if now is not None and old is not None and now["sel"] != old["sel"]:
+        return now["sel"], old["sel"]
+    if now is not None:
+        # One hinted price and nothing else: a store with a single price.
+        rest = [g for g in groups if g["sel"] != now["sel"]]
+        if not rest:
+            return now["sel"], ""
+        other = min(rest, key=lambda g: g["count"])
+        return now["sel"], other["sel"] if other["count"] >= _MIN_CARDS else ""
+    if len(groups) == 1:
+        return groups[0]["sel"], ""
+    # No names to go on, so fall back on the numbers: current is the lower.
+    ordered = sorted(groups, key=lambda g: g["median"])
+    now, old = ordered[0], ordered[-1]
+    return now["sel"], (old["sel"] if old["sel"] != now["sel"] else "")
+
+
+def _usable_href(el):
+    """The element's href, or "" when it is not a link to a product.
+
+    Every card carries wishlist and compare buttons, and on 2B those are bare
+    `<a href="#">`. Counting one as the card's link makes the guesser settle on
+    `a`, which then resolves to the wishlist button in every card and leaves
+    the whole listing sharing a single link.
+
+    An action that only mutates rather than navigates is not a link to the
+    product either: miamicenters' add-to-cart button is an `<a>` whose href is
+    the current page plus `?add-to-cart=<id>`, so on some pages every card
+    resolves to the same address and the listing collapses to one row. The id
+    lives in the URL's query, which makes it useless as a per-product key, so
+    those are skipped and the real `/product/<slug>` link is used instead.
+    """
+    if el.name != "a":
+        return ""
+    href = (el.get("href") or "").strip()
+    if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+        return ""
+    query = urlparse(href).query
+    if query and any(k in query.lower().replace("+", " ")
+                     for k in ("add-to-cart=", "add_to_cart", "remove-from-cart",
+                                "quantity=", "action=add")):
+        return ""
+    return href
+
+
+def _common_descendant(cards, predicate, min_ratio=0.5, hints=()):
+    """The most repeated inner signature of `cards` that satisfies predicate.
+
+    Returns a CSS selector. "Most repeated" is what makes this stable: a card's
+    price is the one element of that kind in nearly every card, while a
+    one-off label or an icon appears in a single card and is never chosen.
+
+    Ties go to a class name matching `hints`, then to the selector naming the
+    most classes. Preferring the *shortest* selector is the obvious-looking
+    rule and it is backwards: on a 2B card both `span` and `span.price` hold
+    the price in all 44 cards, and plain `span` also swallows the rating and
+    the stock line. The narrow one is the right guess; the short one is the
+    guess that quietly collects the wrong number.
+    """
+    counts = {}
+    for card in cards:
+        local = set()
+        for el in card.find_all(True):
+            if predicate(el):
+                s = _sig_selector(_sig(el))
+                if s:
+                    local.add(s)
+        for s in local:
+            counts[s] = counts.get(s, 0) + 1
+    need = max(1, int(len(cards) * min_ratio))
+    best = [s for s, n in counts.items() if n >= need]
+    if not best:
+        return ""
+
+    def rank(sel):
+        classes = sel.split(".", 1)[1] if "." in sel else ""
+        hinted = 1 if hints and any(h in classes.lower() for h in hints) else 0
+        named = classes.count(".") + 1 if classes else 0
+        return (-counts[sel], -hinted, -named, len(sel))
+
+    return min(best, key=rank)
+
+
+def describe_cards(soup, item_sel):
+    """Turn a chosen `item` selector into a full site definition."""
+    cards = soup.select(item_sel)
+    if not cards:
+        return None
+
+    def heady(el):
+        cls = " ".join(el.get("class") or []).lower()
+        return (el.name in ("h1", "h2", "h3", "h4", "h5")
+                or any(h in cls for h in _TITLE_HINT)) and bool(el.get_text(strip=True))
+
+    def anchored(el):
+        return bool(_usable_href(el))
+
+    def titled_anchor(el):
+        return bool(_usable_href(el)) and bool(el.get_text(strip=True))
+
+    # Prices come from the leaf-price pass rather than _common_descendant: a
+    # container holding both prices would read as the higher one. See
+    # _is_price_leaf for why that failure is silent.
+    price_now, price_old = _pick_prices(cards)
+    title = (_common_descendant(cards, heady, hints=_TITLE_HINT)
+             or _common_descendant(cards, titled_anchor)
+             or _card_heading(cards))
+    link = (_common_descendant(cards, anchored)
+            or _card_link_selector(cards) or "")
+    # One `img` is enough: the cards were already proven to repeat, and a
+    # storefront rarely varies the image selector between cards.
+    image = "img" if any(c.find("img") for c in cards) else ""
+    return {"item": item_sel,
+            "title": title,
+            "price_now": price_now,
+            "price_old": price_old,
+            "link": link or item_sel,
+            "image": image}
+
+
+def _card_heading(cards):
+    """The heading element shared by every card, or "" when there is none.
+
+    The last resort for a store that gives no title any other way. The longest
+    text wins among the shared candidates, because a card's name is its longest
+    string while the surrounding block usually holds the shorter labels
+    ("brand", "in stock") on separate elements.
+    """
+    counts = {}
+    for card in cards:
+        local = set()
+        for el in card.find_all(True):
+            s = _sig_selector(_sig(el))
+            if s and el.get_text(" ", strip=True):
+                local.add(s)
+        for s in local:
+            counts[s] = counts.get(s, 0) + 1
+    need = max(1, int(len(cards) * 0.7))
+    best = None
+    for s, n in counts.items():
+        if n < need:
+            continue
+        # Length of the text this selector yields, sampled from the first card.
+        length = 0
+        for card in cards:
+            el = card.select_one(s)
+            if el is None:
+                continue
+            length = len(el.get_text(" ", strip=True))
+            break
+        if length < 8:
+            continue
+        if best is None or length > best[1]:
+            best = (s, length)
+    return best[0] if best else ""
+
+
+def _card_link_selector(cards):
+    """A selector for the card's own link, or "" when the card is inside one.
+
+    _common_descendant only sees anchors *inside* the card. Dubai Phone renders
+    `<a href="/shop/..."><article class="nf-product-card">`, so the card holds no
+    anchor at all and the correct answer is the card's own selector: _parse_cards
+    already falls back to `card.name == "a" and card.has_attr("href")`, and
+    falling back to the caller keeps that path reachable.
+    """
+    for a in cards:
+        if a.name == "a" and _usable_href(a):
+            break
+    else:
+        parent = cards[0].find_parent("a", href=True) if cards else None
+        if parent is None or not _usable_href(parent):
+            return ""
+    return _sig_selector(_sig(cards[0])) or ""
+
+
+def _price_looks_currency(el):
+    """Whether this element's text reads as money rather than as a count.
+
+    A search page lists the store's categories as well as its products, and the
+    category tile on miamicenters reads "1035 products" - which parses as a
+    price of 1035.0 and outranks the real listing, because category tiles repeat
+    more often than 12 products do. The number itself cannot tell them apart, so
+    the words around it have to: a product count is stated in words, and money
+    is not.
+
+    Used to *demote* a candidate, never to accept one, so a store that prints
+    bare numerals with no currency anywhere is unaffected.
+    """
+    text = (el.get_text(" ", strip=True) or "").lower()
+    return not re.search(r"\b(products?|items?|results?|items|منتج|منتجات|"
+                         r"نتيجة|نتائج)\b", text)
+
+
+def _score_parsed(rows, host):
+    """How much a candidate parse can be trusted, higher is better.
+
+    Rows are the real test: _parse_cards already drops anything without a
+    usable price, so what is left is what the app would actually show.
+
+    Counted over *distinct* links, not raw rows. A selector that catches both
+    a card and a wrapper inside it returns every product twice, and that
+    duplicate is not a second product - letting it raise the score is how a
+    too-broad selector beats the right one.
+    """
+    if not rows:
+        return 0.0
+    links = [r["link"] for r in rows if r.get("link")]
+    distinct = len(set(links))
+    on_host = sum(1 for l in links if host in l)
+    titled = sum(1 for r in rows if r.get("title") and r["title"] != "(no title)")
+    sane = sum(1 for r in rows
+               if (r.get("after") or 0) > 0 and r["before"] >= r["after"])
+    # 6.0 is a perfect row: its own distinct link, on this host, titled, and
+    # with a price that adds up.
+    return (distinct * 1.0 + on_host * 1.5 + titled * 1.5 + sane * 2.0)
+
+
+def _is_listing(rows):
+    """Whether these rows are a product listing worth writing to sites.json.
+
+    Deliberately strict. A store that gets added with a wrong price selector
+    will keep returning wrong prices for as long as it stays in the file, and
+    the user has no way to tell a wrong price from a real discount.
+    """
+    if len(rows) < _MIN_CARDS:
+        return False
+    distinct = len({r["link"] for r in rows if r.get("link")})
+    if distinct < _MIN_CARDS:
+        # Every row the same link: the selector matched one container, or one
+        # product, over and over.
+        return False
+    sane = sum(1 for r in rows
+               if (r.get("after") or 0) > 0 and r["before"] >= r["after"])
+    titled = sum(1 for r in rows
+                 if r.get("title") and r["title"] != "(no title)")
+    return (sane >= len(rows) * 0.8
+            and titled >= len(rows) * 0.8
+            and distinct >= len(rows) * 0.8)
+
+
+def _parse_candidate(cand, html, final_url):
+    """Parse a candidate, then repair the guess that produced bad rows.
+
+    A compare-at price has to be at least the current price. When the guessed
+    `price_old` selector latches onto something else that merely looks numeric
+    - a star rating, a review count, an instalment figure - every row comes
+    back with before < after or before == 0, and a bogus 0% or 200% discount
+    is worse than having no old price at all. Dropping the guess and parsing
+    again leaves a correct single-price store, which is what the page says.
+    """
+    rows = _parse_cards(cand, html, final_url)
+    if rows and cand.get("price_old"):
+        broken = any(r["before"] <= 0 or r["before"] < r["after"] for r in rows)
+        if broken:
+            logging.info("dropping guessed price_old %r: it does not read as a "
+                         "compare-at price", cand["price_old"])
+            cand = dict(cand, price_old="")
+            rows = _parse_cards(cand, html, final_url)
+    return cand, rows
+
+
+def _trial_site(name, base, pattern, item_sel, detail):
+    """A sites.json entry for one candidate, ready to hand to _parse_cards."""
+    site = {"name": name, "search_url": _join(base, pattern),
+            "item": item_sel}
+    site.update(detail or {})
+    return site
+
+
+def _probe_page(html, final_url, base, pattern, name, host):
+    """Try every ranked card set on this page, return (site, rows, score, tried).
+
+    This is the loop that repairs our own guess: the page already arrived, so
+    nothing is re-requested and the store is not touched again. Each candidate
+    goes through _parse_cards exactly as a search would, and the best-scoring
+    listing wins.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    best = None
+    tried = 0
+    for item_sel in rank_card_selectors(soup):
+        detail = describe_cards(soup, item_sel)
+        if not detail:
+            continue
+        cand = _trial_site(name, base, pattern, item_sel, detail)
+        if not cand.get("price_now") or not cand.get("title"):
+            # Nothing to read a price or a name from; a further candidate is
+            # strictly more likely to work than finishing this one.
+            continue
+        try:
+            cand, rows = _parse_candidate(cand, html, final_url)
+        except Exception:
+            logging.exception("candidate parse failed for %s", item_sel)
+            continue
+        tried += 1
+        score = _score_parsed(rows, host)
+        if score and (best is None or score > best[2]):
+            best = (cand, rows, score)
+        # 4.5 of the 6.0 a perfect row scores: nearly every row brought its own
+        # distinct link on this host, a title and arithmetic that adds up.
+        if score >= 4.5 * max(1, len(rows)):
+            break
+    if best:
+        return best[0], best[1], best[2], tried
+    return None, [], 0.0, tried
+
+
+def _responds_to_keyword(base, pattern, name, host, real_count):
+    """Whether this address actually changes when the keyword changes.
+
+    This one request is what keeps a broken guess out of sites.json. A page can
+    list plenty of products and still ignore the keyword entirely - it was the
+    front page, or a category, or a param the store does not read - and such a
+    store would sit in the list looking perfectly healthy while returning the
+    same products for every search the user ever runs.
+
+    Compared as a ratio rather than "zero results", because a store that shows
+    recommendations when a search finds nothing is still a working search.
+    """
+    nonsense = "zzqqxx%d" % (int(time.time()) % 1000000)
+    url = _join(base, pattern).replace("{q}", quote_plus(nonsense))
+    try:
+        html, final_url = fetch_html(url, site_key="discover")
+    except Exception:
+        # An address that cannot even be read for a nonsense word is not a
+        # search address.
+        logging.info("nonsense probe failed for %s", url)
+        return False
+    if not html or looks_like_checkpoint(html):
+        return False
+    try:
+        _site, rows, _score, _t = _probe_page(
+            html, final_url, base, pattern, name, host)
+    except Exception:
+        logging.exception("nonsense probe parse failed for %s", url)
+        return False
+    distinct = len({r["link"] for r in rows if r.get("link")})
+    return distinct < max(1, int(real_count * 0.4))
+
+
+def form_search_patterns(base, html, host):
+    """Search URLs built from the site's own search form.
+
+    A storefront nearly always ships a search box, and its `name` attribute is
+    the only dependable source for the parameter: miamicenters 404s on every
+    conventional pattern (`?q=`, `/search?q=`, `/catalogsearch/result/?q=`) and
+    answers on `?s=`, which nothing in the markup would have revealed. The form
+    is read before the generic list is tried, so the right answer costs one
+    request instead of six.
+
+    Only GET forms whose action resolves to this host are used, and the
+    placeholder is placed in the position the form itself uses: some themes put
+    the keyword in the path (`/search/iphone`) rather than the query string.
+    """
+    out = []
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+    except Exception:
+        return out
+    for form in soup.find_all("form"):
+        method = (form.get("method") or "get").lower()
+        if method != "get":
+            continue
+        action = (form.get("action") or "").strip()
+        if not action:
+            continue
+        target = urljoin(base + "/", action)
+        parsed = urlparse(target)
+        if parsed.netloc.lower() != host.lower():
+            continue
+        for inp in form.find_all(["input", "select"]):
+            if (inp.get("type") or "").lower() in ("submit", "button", "hidden"):
+                continue
+            name = (inp.get("name") or "").strip()
+            if name.lower() not in _FORM_SEARCH_NAMES:
+                continue
+            if inp.name == "input" and (inp.get("type") or "").lower() == "hidden":
+                continue
+            # Keep any other params the form needs (post_type and friends), so a
+            # form that only searches products keeps only searching products.
+            pairs = []
+            for other in form.find_all(["input", "select"]):
+                oname = (other.get("name") or "").strip()
+                if not oname or oname == name:
+                    continue
+                otype = (other.get("type") or "").lower()
+                if otype in ("submit", "button"):
+                    continue
+                pairs.append("%s=%s" % (quote_plus(oname),
+                                        quote_plus(other.get("value") or "")))
+            # The slash the form's own action carries is kept: some themes route
+            # on it, and /ar and /ar/ are different pages on this site.
+            path = parsed.path or "/"
+            if not path.endswith("/"):
+                path += "/"
+            stem = "%s://%s%s" % (parsed.scheme, parsed.netloc, path)
+            tail = "&".join([p for p in pairs if not p.endswith("=")])
+            if tail:
+                out.append("%s?%s&%s={q}" % (stem, tail, quote_plus(name)))
+            else:
+                out.append("%s?%s={q}" % (stem, quote_plus(name)))
+            # The keyword in the path, which some themes route on.
+            if parsed.path and not parsed.query:
+                out.append("%s{q}" % stem)
+            break
+    # De-duplicate, keep order.
+    seen, ordered = set(), []
+    for p in out:
+        if p not in seen:
+            seen.add(p)
+            ordered.append(p)
+    return ordered
+
+
+def guess_search_url(base, name, host, progress=None, sleep=time.sleep):
+    """Find the URL on this store that lists search results for a keyword.
+
+    Only addresses carrying `{q}` are eligible. A shop's front page lists
+    products too, and accepting one would look like success while answering
+    every future search with the same page, so the front page is never a
+    candidate.
+
+    The site's own search form is consulted first, because that is where the
+    parameter name is written down. The generic patterns follow for the stores
+    that ship no form (or hide it behind JavaScript).
+
+    Returns (pattern, html, final_url, site, rows) for the first page that
+    answers with a real listing that also responds to the keyword, or
+    (None, ...) once the request budget is spent.
+    """
+    tried = []
+    patterns = []
+    # One request for the form, when the pasted address is a page that has one.
+    try:
+        home_html, _home_final = fetch_html(base, site_key="discover")
+    except CheckpointError:
+        raise
+    except Exception:
+        home_html = ""
+    if home_html and not looks_like_checkpoint(home_html):
+        patterns.extend(form_search_patterns(base, home_html, host))
+    patterns.extend(_SEARCH_URL_PATTERNS)
+    patterns = patterns[:_MAX_SEARCH_PROBES]
+    for i, pattern in enumerate(patterns):
+        if progress:
+            progress("جاري البحث عن صفحة النتائج… (%d/%d)"
+                     % (i + 1, len(patterns)))
+        url = _join(base, pattern).replace("{q}", quote_plus(_PROBE_QUERY))
+        try:
+            html, final_url = fetch_html(url, site_key="discover")
+        except CheckpointError:
+            raise
+        except Exception as e:
+            logging.info("search url probe failed for %s: %s", url, e)
+            tried.append(pattern)
+            continue
+        if html and looks_like_checkpoint(html):
+            raise CheckpointError("checkpoint on %s" % url)
+        site, rows, _score, _t = _probe_page(html, final_url, base, pattern,
+                                             name, host)
+        if _is_listing(rows):
+            if _responds_to_keyword(base, pattern, name, host, len(rows)):
+                return pattern, html, final_url, site, rows
+            logging.info("%s answered but ignored the keyword: %s",
+                         base, pattern)
+        tried.append(pattern)
+        # Each attempt is a real request against the store's server.
+        sleep(random.uniform(0.6, 1.4))
+    logging.info("no usable result page on %s; tried %s", base, tried)
+    return None, "", "", None, []
+
+
+def probe_store(raw_url, progress=None):
+    """Decide whether a pasted link can be read, and return the site to add.
+
+    Never raises: every failure comes back as {"ok": False, "message": ...} in
+    plain Arabic, because the person using this does not read English and
+    cannot tell a blocked store from a broken one.
+    """
+    base = normalize_store_url(raw_url)
+    if not base:
+        return {"ok": False, "stage": "url",
+                "message": "الرابط غير صالح. اكتب رابط المتجر كاملًا، "
+                           "مثل example.com"}
+    host = urlparse(base).netloc
+    name = host.split(":")[0].replace("www.", "") or host
+    if progress:
+        progress("جاري فتح %s…" % host)
+    try:
+        pattern, html, final_url, site, rows = guess_search_url(
+            base, name, host, progress)
+    except CheckpointError:
+        # The store answered with a protection wall instead of its results.
+        # Retrying is what makes a block worse, so this stops here.
+        logging.info("store %s served a bot checkpoint", host)
+        return {"ok": False, "stage": "blocked",
+                "message": "الموقع %s يحجب الاستخراج الآلي، "
+                           "لذلك لا يمكن إضافة هذا المتجر." % name}
+    except Exception as e:
+        logging.exception("probe failed for %s", base)
+        return {"ok": False, "stage": "network",
+                "message": "تعذّر الوصول إلى %s. تأكد من الرابط." % name}
+    if not site:
+        return {"ok": False, "stage": "nolist",
+                "message": "لم يتم العثور على صفحة نتائج في %s. "
+                           "قد تكون النتائج تظهر بعد تشغيل جافاسكريبت، "
+                           "وهذا البرنامج يقرأ النتائج الظاهرة في الصفحة فقط."
+                           % name}
+    entry = dict(site)
+    entry["search_url"] = _join(base, pattern)
+    entry["name"] = name
+    # A listing that paginates and was not told how is the difference between
+    # twelve products and the whole catalogue: the search reports what it
+    # fetched, and page one looks like a complete answer. Walking the pages is
+    # discovered here so the stored store behaves like the two hand-written
+    # ones, and capped by _MAX_AUTO_PAGES.
+    soup = BeautifulSoup(html, "html.parser")
+    found = detect_pagination(entry, entry["search_url"], html)
+    if found and found > 1:
+        cap = min(found, _MAX_AUTO_PAGES)
+        # Which style the store uses is read off its pager, not assumed: a
+        # WordPress permalink wants /page/N/ while Shopify wants ?page=N, and
+        # guessing wrong returns page 1 for every page asked for.
+        template = detect_page_path(soup, final_url)
+        if template:
+            page_rule = {"path": template, "max_pages": cap}
+        else:
+            param = detect_page_param(soup, final_url) or "page"
+            page_rule = {"param": param, "max_pages": cap}
+        entry["paginate"] = page_rule
+        entry["page_delay"] = [0.5, 1.1]
+    if progress:
+        # Says what page one held and how far the walk goes, because a store
+        # that spans 50 pages takes about a minute and silence would read as a
+        # hang. The count is what the store paginates to, not what it yields:
+        # miamicenters repeats its last page for the final four entries, so 50
+        # pages hold 460 products rather than 600.
+        progress("تم العثور على %d منتج%s. جاري الحفظ…"
+                 % (len(rows),
+                    " موزعة على %d صفحة" % entry["paginate"]["max_pages"]
+                    if entry.get("paginate") else ""))
+    return {"ok": True, "stage": "ok", "site": entry, "rows": len(rows),
+            "sample": rows[:3],
+            "message": "تمت إضافة %s بنجاح (%d منتج%s)."
+                       % (name, len(rows),
+                          " في %d صفحة" % entry["paginate"]["max_pages"]
+                          if entry.get("paginate") else " في صفحة النتائج")}
+
+
+def append_site(entry):
+    """Write one discovered store into sites.json, keeping the others.
+
+    Atomic: the file is rewritten next to itself and moved into place, so a
+    crash halfway cannot leave a store list that fails to parse - which would
+    take every configured store down, not just the new one.
+    """
+    path = sites_path()
+    data = {"sites": []}
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                loaded = json.load(f)
+            data = loaded if isinstance(loaded, dict) else {"sites": loaded}
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            logging.exception("could not read sites.json before append")
+            return None, "ملف sites.json غير صالح، لم يتم الحفظ."
+    sites = data.get("sites")
+    if not isinstance(sites, list):
+        sites = []
+    for s in sites:
+        if not isinstance(s, dict):
+            continue
+        if s.get("name") == entry["name"]:
+            return None, "المتجر %s موجود بالفعل." % entry["name"]
+        # Matched on host, not on name: the discovered name is the domain,
+        # while a store already in the file is called whatever its owner called
+        # it ("2B Egypt"), so "2b.com.eg" would otherwise be added as a second
+        # store and every search would show its products twice.
+        host = urlparse(s.get("search_url") or "").netloc.lower()
+        new_host = urlparse(entry.get("search_url") or "").netloc.lower()
+        if new_host and host and host == new_host:
+            return None, ("المتجر %s موجود بالفعل باسم %s."
+                          % (entry["name"], s.get("name", "?")))
+    sites.append(entry)
+    payload = json.dumps({"sites": sites}, ensure_ascii=False, indent=2) + "\n"
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(payload)
+        os.replace(tmp, path)
+    except OSError as e:
+        # The usual cause is a Program Files install: sites.json lives next to
+        # the exe so users can add a store by hand, which is read-only there.
+        logging.exception("could not write sites.json")
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        return None, ("تعذّر حفظ المتجر (%s). جرّب تشغيل البرنامج من مجلد "
+                      "تكتبه، أو أضف المتجر يدويًا إلى sites.json." % e)
+    return entry, None
+
+
 def settings_path():
     return os.path.join(data_dir(), SETTINGS_FILE)
 
@@ -1557,6 +2870,14 @@ class TrackerCore:
         # still on disk for the price-delta baseline above and for the
         # Sources page, which is explicitly about history.
         self.site_stats = {}
+        # The "add a store by URL" probe on the Sources page. It is a job with
+        # its own state because it outlives the call that starts it: the probe
+        # walks search-URL patterns with pauses between them and the page polls
+        # for progress rather than waiting on a bridge call that never returns.
+        self._add_lock = threading.Lock()
+        self._add_job = {"state": "idle", "message": "", "result": None,
+                         "url": ""}
+        self._add_cancel = False
         # Manifest cache. The page re-checks for updates while the window
         # stays open, and a repeating network fetch on every check is a
         # cost the user can feel. The manifest only changes when a new
@@ -2269,6 +3590,85 @@ class TrackerCore:
         self.save_settings()
         return True
 
+    # ----- adding a store by its URL -----
+    def add_store(self, url):
+        """Start working out how to read a pasted store URL.
+
+        A probe is a handful of real requests to somebody's server with pauses
+        between them, so it runs on its own thread and the page polls
+        add_store_status, exactly like a search. The window never blocks and
+        the button stays live to cancel.
+        """
+        with self._add_lock:
+            if self._add_job.get("state") == "running":
+                return {"ok": False, "started": False,
+                        "message": "هناك فحص جارٍ بالفعل."}
+            self._add_job = {"state": "running", "message": "جاري البدء…",
+                             "result": None, "url": url or ""}
+        t = threading.Thread(target=self._add_store_worker, args=(url or "",),
+                             daemon=True)
+        t.start()
+        return {"ok": True, "started": True, "message": "جاري فحص الموقع…"}
+
+    def cancel_add_store(self):
+        """Stops after the request in flight; nothing is half-saved."""
+        with self._add_lock:
+            if self._add_job.get("state") != "running":
+                return {"ok": False}
+            self._add_cancel = True
+            self._add_job["message"] = "جاري الإلغاء…"
+        return {"ok": True}
+
+    def add_store_status(self):
+        with self._add_lock:
+            job = dict(self._add_job)
+        return {"state": job.get("state", "idle"),
+                "message": job.get("message", ""),
+                "result": job.get("result")}
+
+    def _add_store_progress(self, message):
+        with self._add_lock:
+            if self._add_job.get("state") == "running":
+                self._add_job["message"] = message
+
+    def _add_store_worker(self, url):
+        """Probe, then save. Runs off the UI thread; never raises."""
+        try:
+            result = probe_store(url, progress=self._add_store_progress)
+            if result.get("ok"):
+                with self._add_lock:
+                    if self._add_cancel:
+                        self._add_job = {"state": "cancelled",
+                                         "message": "تم إلغاء الفحص.",
+                                         "result": None, "url": url}
+                        return
+                entry, err = append_site(result["site"])
+                if err:
+                    result = {"ok": False, "stage": "save", "message": err}
+                else:
+                    # Re-read rather than appending to the list in memory: the
+                    # file on disk is the source of truth, and load_sites also
+                    # rebuilds the per-site detail batch caps.
+                    sites, sites_error = load_sites()
+                    if sites_error:
+                        logging.error("sites.json unreadable after append: %s",
+                                      sites_error)
+                    else:
+                        self.sites = sites
+            state = "ok" if result.get("ok") else "failed"
+            with self._add_lock:
+                self._add_job = {"state": state,
+                                 "message": result.get("message", ""),
+                                 "result": result, "url": url}
+                self._add_cancel = False
+        except Exception:
+            logging.exception("add store failed")
+            with self._add_lock:
+                self._add_job = {"state": "failed",
+                                 "message": "حدث خطأ أثناء فحص الموقع.",
+                                 "result": None, "url": url}
+                self._add_cancel = False
+
     def set_columns(self, cols):
         cols = [c for c in (cols or []) if c in ALL_COLUMNS]
         if not cols:
@@ -2650,6 +4050,15 @@ class Api:
 
     def set_site_enabled(self, name, on):
         return {"ok": self._core.set_site_enabled(name or "", bool(on))}
+
+    def add_store(self, url):
+        return self._core.add_store(url or "")
+
+    def cancel_add_store(self):
+        return self._core.cancel_add_store()
+
+    def add_store_status(self):
+        return self._core.add_store_status()
 
     def set_columns(self, cols):
         return {"ok": self._core.set_columns(list(cols or []))}
