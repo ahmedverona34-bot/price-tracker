@@ -150,7 +150,7 @@ SLOW_AFTER_SEC = 45  # a site slower than this gets an amber status dot
 # never reads the installed version from the registry: the registry can hold a
 # newer one after an update, and a mismatch there would make the button offer
 # the same build forever.
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.2.3"
 # A manifest file served over HTTPS. Two lines:
 #
 #   1.1.0
@@ -2654,11 +2654,12 @@ def _write_relaunch_helper(path, installer_pid, setup_image, exe):
         "Option Explicit\r\n"
         "\r\n"
         "Dim fso, log, pid, waited, tries, sh, err, text\r\n"
-        "Dim exe, exeImage, logPath\r\n"
+        "Dim exe, exeImage, logPath, setupImage\r\n"
         "Set fso = CreateObject(\"Scripting.FileSystemObject\")\r\n"
         "Set sh = CreateObject(\"WScript.Shell\")\r\n"
         "exe = sh.ExpandEnvironmentStrings(\"%%PRICE_TRACKER_EXE%%\")\r\n"
         "logPath = sh.ExpandEnvironmentStrings(\"%%PRICE_TRACKER_RELAUNCH_LOG%%\")\r\n"
+        "setupImage = sh.ExpandEnvironmentStrings(\"%%PRICE_TRACKER_SETUP_IMAGE%%\")\r\n"
         "exeImage = fso.GetFileName(exe)\r\n"
         "pid = %d\r\n"
         "Set log = fso.CreateTextFile(logPath, True)\r\n"
@@ -2667,7 +2668,7 @@ def _write_relaunch_helper(path, installer_pid, setup_image, exe):
         "' A PID alone is not proof: Windows recycles PIDs, so the process\r\n"
         "' image name must match the setup that was just run as well.\r\n"
         "waited = 0\r\n"
-        "Do While IsRunning(\"PID eq \" & pid, \"%%PRICE_TRACKER_SETUP_IMAGE%%\")\r\n"
+        "Do While IsRunning(\"PID eq \" & pid, setupImage)\r\n"
         "  waited = waited + 1\r\n"
         "  If waited > 300 Then Exit Do\r\n"
         "  WScript.Sleep 2000\r\n"
