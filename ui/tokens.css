@@ -216,3 +216,216 @@
   --lowest-95:   rgba(255, 255, 255, 0.96);
   --high-40:     rgba(241, 245, 249, 0.80);
 }
+
+/* ===========================================================================
+   Appearance presets — terminal palettes from terminalcolors.com.
+   ---------------------------------------------------------------------------
+   Applied via html[data-appearance="…"], on top of the dark tokens above.
+   Every rule in styles.css reads var(--…), so flipping the attribute
+   repaints the whole window. "default" has no override (current theme).
+   Sources: Dracula #282a36/#bd93f9/#ff79c6, Tokyo Night #1a1b26/#7aa2f7,
+   Catppuccin Mocha #1e1e2e/#cba6f7, Nord #2e3440/#88c0d0,
+   Gruvbox #282828/#fabd2f, Solarized #002b36/#268bd2,
+   One Dark #282c34/#61afef.
+   =========================================================================== */
+html[data-appearance="dracula"] {
+  --surface-container-lowest: #282a36;
+  --surface-container-low: #21222c;
+  --surface-container: #343746;
+  --surface-container-high: #44475a;
+  --surface-container-highest: #6272a4;
+  --on-surface: #f8f8f2;
+  --on-surface-variant: #e2e2f0;
+  --outline: #6272a4;
+  --outline-variant: #44475a;
+  --primary: #bd93f9;
+  --primary-container: #bd93f9;
+  --on-primary-container: #282a36;
+  --inverse-primary: #ff79c6;
+  --surface-tint: #bd93f9;
+  --secondary: #50fa7b;
+  --secondary-container: #50fa7b;
+  --tertiary: #ffb86c;
+  --error: #ff5555;
+  --primary-10: rgba(189, 147, 249, 0.10);
+  --primary-15: rgba(189, 147, 249, 0.15);
+  --shadow-cta: 0 4px 14px rgba(189, 147, 249, 0.35);
+  --shadow-cta-hov: 0 6px 20px rgba(189, 147, 249, 0.50);
+}
+html[data-appearance="tokyo-night"] {
+  --surface-container-lowest: #1a1b26;
+  --surface-container-low: #16161e;
+  --surface-container: #24283b;
+  --surface-container-high: #292e42;
+  --surface-container-highest: #414868;
+  --on-surface: #c0caf5;
+  --on-surface-variant: #a9b1d6;
+  --outline: #565f89;
+  --outline-variant: #292e42;
+  --primary: #7aa2f7;
+  --primary-container: #7aa2f7;
+  --on-primary-container: #1a1b26;
+  --inverse-primary: #bb9af7;
+  --surface-tint: #7aa2f7;
+  --secondary: #9ece6a;
+  --secondary-container: #9ece6a;
+  --tertiary: #e0af68;
+  --error: #f7768e;
+  --primary-10: rgba(122, 162, 247, 0.10);
+  --primary-15: rgba(122, 162, 247, 0.15);
+  --shadow-cta: 0 4px 14px rgba(122, 162, 247, 0.35);
+  --shadow-cta-hov: 0 6px 20px rgba(122, 162, 247, 0.50);
+}
+html[data-appearance="catppuccin"] {
+  --surface-container-lowest: #1e1e2e;
+  --surface-container-low: #181825;
+  --surface-container: #313244;
+  --surface-container-high: #45475a;
+  --surface-container-highest: #585b70;
+  --on-surface: #cdd6f4;
+  --on-surface-variant: #bac2de;
+  --outline: #7f849c;
+  --outline-variant: #45475a;
+  --primary: #b4befe;
+  --primary-container: #89b4fa;
+  --on-primary-container: #1e1e2e;
+  --inverse-primary: #cba6f7;
+  --surface-tint: #89b4fa;
+  --secondary: #a6e3a1;
+  --secondary-container: #a6e3a1;
+  --tertiary: #f9e2af;
+  --error: #f38ba8;
+  --primary-10: rgba(137, 180, 250, 0.10);
+  --primary-15: rgba(137, 180, 250, 0.15);
+  --shadow-cta: 0 4px 14px rgba(137, 180, 250, 0.35);
+  --shadow-cta-hov: 0 6px 20px rgba(137, 180, 250, 0.50);
+}
+html[data-appearance="nord"] {
+  --surface-container-lowest: #2e3440;
+  --surface-container-low: #242933;
+  --surface-container: #3b4252;
+  --surface-container-high: #434c5e;
+  --surface-container-highest: #4c566a;
+  --on-surface: #eceff4;
+  --on-surface-variant: #d8dee9;
+  --outline: #4c566a;
+  --outline-variant: #434c5e;
+  --primary: #88c0d0;
+  --primary-container: #5e81ac;
+  --on-primary-container: #eceff4;
+  --inverse-primary: #81a1c1;
+  --surface-tint: #88c0d0;
+  --secondary: #a3be8c;
+  --secondary-container: #a3be8c;
+  --tertiary: #ebcb8b;
+  --error: #bf616a;
+  --primary-10: rgba(136, 192, 208, 0.10);
+  --primary-15: rgba(136, 192, 208, 0.15);
+  --shadow-cta: 0 4px 14px rgba(94, 129, 172, 0.40);
+  --shadow-cta-hov: 0 6px 20px rgba(94, 129, 172, 0.55);
+}
+html[data-appearance="gruvbox"] {
+  --surface-container-lowest: #282828;
+  --surface-container-low: #1d2021;
+  --surface-container: #3c3836;
+  --surface-container-high: #504945;
+  --surface-container-highest: #665c54;
+  --on-surface: #ebdbb2;
+  --on-surface-variant: #d5c4a1;
+  --outline: #928374;
+  --outline-variant: #504945;
+  --primary: #fabd2f;
+  --primary-container: #d79921;
+  --on-primary-container: #282828;
+  --inverse-primary: #fe8019;
+  --surface-tint: #fabd2f;
+  --secondary: #b8bb26;
+  --secondary-container: #b8bb26;
+  --tertiary: #fe8019;
+  --error: #fb4934;
+  --primary-10: rgba(250, 189, 47, 0.10);
+  --primary-15: rgba(250, 189, 47, 0.15);
+  --shadow-cta: 0 4px 14px rgba(215, 153, 33, 0.40);
+  --shadow-cta-hov: 0 6px 20px rgba(215, 153, 33, 0.55);
+}
+html[data-appearance="solarized"] {
+  --surface-container-lowest: #002b36;
+  --surface-container-low: #073642;
+  --surface-container: #0e4a5a;
+  --surface-container-high: #155e75;
+  --surface-container-highest: #586e75;
+  --on-surface: #eee8d5;
+  --on-surface-variant: #93a1a1;
+  --outline: #586e75;
+  --outline-variant: #0e4a5a;
+  --primary: #268bd2;
+  --primary-container: #268bd2;
+  --on-primary-container: #fdf6e3;
+  --inverse-primary: #2aa198;
+  --surface-tint: #268bd2;
+  --secondary: #859900;
+  --secondary-container: #859900;
+  --tertiary: #b58900;
+  --error: #dc322f;
+  --primary-10: rgba(38, 139, 210, 0.10);
+  --primary-15: rgba(38, 139, 210, 0.15);
+  --shadow-cta: 0 4px 14px rgba(38, 139, 210, 0.40);
+  --shadow-cta-hov: 0 6px 20px rgba(38, 139, 210, 0.55);
+}
+html[data-appearance="one-dark"] {
+  --surface-container-lowest: #282c34;
+  --surface-container-low: #21252b;
+  --surface-container: #2c313c;
+  --surface-container-high: #3e4451;
+  --surface-container-highest: #5c6370;
+  --on-surface: #abb2bf;
+  --on-surface-variant: #9da5b4;
+  --outline: #5c6370;
+  --outline-variant: #3e4451;
+  --primary: #61afef;
+  --primary-container: #61afef;
+  --on-primary-container: #282c34;
+  --inverse-primary: #c678dd;
+  --surface-tint: #61afef;
+  --secondary: #98c379;
+  --secondary-container: #98c379;
+  --tertiary: #e5c07b;
+  --error: #e06c75;
+  --primary-10: rgba(97, 175, 239, 0.10);
+  --primary-15: rgba(97, 175, 239, 0.15);
+  --shadow-cta: 0 4px 14px rgba(97, 175, 239, 0.35);
+  --shadow-cta-hov: 0 6px 20px rgba(97, 175, 239, 0.50);
+}
+
+/* ===========================================================================
+   Font scale — one global slider (small / medium / large).
+   ---------------------------------------------------------------------------
+   Tokens are px-based, so the scale redefines the type tokens instead of
+   touching the root font size. Layout (rail, radii, spacing) stays fixed.
+   =========================================================================== */
+html[data-font-scale="small"] {
+  --fs-body-lg-size: 15px; --fs-body-lg-lh: 22px;
+  --fs-body-md-size: 13px; --fs-body-md-lh: 19px;
+  --fs-body-sm-size: 12px; --fs-body-sm-lh: 17px;
+  --fs-data-metric-size: 26px; --fs-data-metric-lh: 34px;
+  --fs-data-mono-size: 12px; --fs-data-mono-lh: 17px;
+  --fs-headline-xl-size: 30px; --fs-headline-xl-lh: 38px;
+  --fs-headline-lg-size: 22px; --fs-headline-lg-lh: 30px;
+  --fs-headline-md-size: 19px; --fs-headline-md-lh: 26px;
+  --fs-headline-sm-size: 15px; --fs-headline-sm-lh: 22px;
+  --fs-label-md-size: 11px; --fs-label-md-lh: 15px;
+  --fs-label-sm-size: 10px; --fs-label-sm-lh: 13px;
+}
+html[data-font-scale="large"] {
+  --fs-body-lg-size: 18px; --fs-body-lg-lh: 26px;
+  --fs-body-md-size: 16px; --fs-body-md-lh: 23px;
+  --fs-body-sm-size: 14px; --fs-body-sm-lh: 20px;
+  --fs-data-metric-size: 31px; --fs-data-metric-lh: 40px;
+  --fs-data-mono-size: 14px; --fs-data-mono-lh: 20px;
+  --fs-headline-xl-size: 35px; --fs-headline-xl-lh: 44px;
+  --fs-headline-lg-size: 27px; --fs-headline-lg-lh: 36px;
+  --fs-headline-md-size: 22px; --fs-headline-md-lh: 30px;
+  --fs-headline-sm-size: 18px; --fs-headline-sm-lh: 26px;
+  --fs-label-md-size: 13px; --fs-label-md-lh: 18px;
+  --fs-label-sm-size: 12px; --fs-label-sm-lh: 16px;
+}

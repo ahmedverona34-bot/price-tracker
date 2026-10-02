@@ -1649,3 +1649,51 @@ input[type="text"] { font-family: inherit; }
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ===========================================================================
+   Appearance presets — swatch grid + font-size slider (settings page)
+   =========================================================================== */
+.appear-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--space-md);
+}
+.appear-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: var(--space-md);
+  background: var(--surface-container-lowest);
+  border: 1px solid var(--surface-container);
+  border-radius: var(--r-xl);
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease;
+  font-family: inherit;
+  font-size: var(--fs-body-sm-size);
+  color: var(--on-surface);
+  text-align: start;
+}
+.appear-opt:hover { background: var(--surface-container); }
+.appear-opt.active { border-color: var(--primary-container); }
+.appear-sw {
+  width: 34px; height: 34px;
+  border-radius: 10px;
+  flex: 0 0 34px;
+  border: 1px solid var(--outline-30);
+}
+.appear-opt span:last-child { font-weight: 500; }
+.font-slider-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+.font-slider-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--primary-container);
+}
+.font-slider-val {
+  min-width: 64px;
+  text-align: center;
+  font-size: var(--fs-label-md-size);
+  color: var(--on-surface-variant);
+}
