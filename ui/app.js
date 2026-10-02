@@ -563,26 +563,6 @@
       });
     });
 
-  function renderDefaultCols() {
-    setHTML($("defaultCols"), COLUMNS.map(function (c) {
-      return '<label class="col-opt"><input type="checkbox" class="custom-checkbox" data-col="' + c.key + '"'
-        + (state.cols.indexOf(c.key) >= 0 ? " checked" : "")
-        + ' aria-label="' + esc(c.label) + '">'
-        + "<span>" + esc(c.label) + "</span></label>";
-    }).join(""));
-    Array.prototype.forEach.call(
-      $("defaultCols").querySelectorAll("input"), function (cb) {
-        cb.addEventListener("change", function () {
-          var list = Array.prototype.map.call(
-            $("defaultCols").querySelectorAll("input:checked"),
-            function (x) { return x.dataset.col; });
-          if (!list.length) { cb.checked = true; return; }
-          setState({ cols: list });
-          api("set_columns", list).then(function () { renderColMenu(); });
-        });
-      });
-  }
-
   function loadSettings() {
     api("get_settings").then(function (s) {
       if (!s) return;
@@ -592,7 +572,6 @@
         $("minBox").value = s.min_price || "";
       renderExclChips();
       renderRefreshSeg(s.refresh_sec == null ? 600 : s.refresh_sec);
-      renderDefaultCols();
       renderAppearGrid(applyAppearance(s.appearance || "default"));
       applyFontScale(s.font_scale || "medium");
     });
@@ -865,18 +844,13 @@
   /* ------------------------------------------------------------------ *
    * Column menu
    * ------------------------------------------------------------------ */
-  /* The trigger lives inside the search field, so the menu is placed under it
-     with inline-start/end rather than left, to stay on the right in RTL. */
+  /* The menu is anchored to its trigger in CSS (absolute in the wrap),
+     so opening it is a plain toggle — no viewport math to drift. */
   function closeColMenu() { $("colMenu").classList.add("hidden"); }
 
   $("colBtn").addEventListener("click", function (e) {
     e.stopPropagation();
-    var menu = $("colMenu");
-    if (!menu.classList.contains("hidden")) { closeColMenu(); return; }
-    var r = $("colBtn").getBoundingClientRect();
-    menu.style.top = (r.bottom + 6) + "px";
-    menu.style.insetInlineEnd = Math.max(8, window.innerWidth - r.right) + "px";
-    menu.classList.remove("hidden");
+    $("colMenu").classList.toggle("hidden");
   });
   window.addEventListener("resize", closeColMenu);
   document.addEventListener("click", function (e) {

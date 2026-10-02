@@ -381,6 +381,10 @@ button { font-family: inherit; }
   border-radius: var(--r-xl);
   padding: 14px;                      /* p-3.5 */
   box-shadow: var(--shadow-sm);
+  /* Lifts the card (and its column menu) above the sticky table header
+     (z-20) without reaching the fixed topbar (z-40). Paint order only. */
+  position: relative;
+  z-index: 30;
 }
 
 /* The reference wraps this row in lg:flex-row and stacks below the lg
@@ -468,9 +472,17 @@ button { font-family: inherit; }
 
 .colmenu-wrap { position: relative; }
 #colMenu {
-  position: fixed;
+  /* Absolute to the trigger wrap, never fixed: fixed coordinates break the
+     moment any ancestor carries a transform (the section entrance keeps one
+     via fill mode), which reparents the menu and traps it under other
+     layers. Absolute anchoring follows the button through scroll and RTL. */
+  position: absolute;
+  top: calc(100% + 6px);
+  inset-inline-end: 0;
   z-index: 60;
   min-width: 200px;
+  max-height: 50vh;
+  overflow-y: auto;
   padding: var(--space-sm);
   background: var(--surface-container-high);
   border: 1px solid var(--outline-variant);
@@ -1488,37 +1500,6 @@ input[type="text"] { font-family: inherit; }
   border: 1px solid var(--surface-container);
   border-radius: var(--r-xl);
   min-height: 44px;
-}
-
-/* column picker: card per column, as in the reference grid */
-.col-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: var(--space-md);
-}
-.col-opt {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: var(--space-md);
-  background: var(--surface-container-lowest);
-  border: 1px solid var(--surface-container);
-  border-radius: var(--r-xl);
-  cursor: pointer;
-  transition: background 150ms ease;
-}
-.col-opt:hover { background: var(--surface-container); }
-.col-opt input {
-  width: 16px; height: 16px;
-  accent-color: var(--primary-container);
-  cursor: pointer;
-  flex: 0 0 16px;
-}
-.col-opt span {
-  font-size: var(--fs-body-sm-size);
-  line-height: var(--fs-body-sm-lh);
-  font-weight: 500;
-  color: var(--on-surface);
 }
 
 /* docked bottom action bar */
