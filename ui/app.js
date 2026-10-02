@@ -142,6 +142,55 @@
     } catch (e) { return ""; }
   }
 
+  /* Circular theme reveal (View Transitions API).
+   * Same idea as the viral light/dark clip-path demo: the new theme
+   * expands as a circle from the toggle click point instead of swapping
+   * instantly. Falls back to an instant switch when the API is missing
+   * (older WebView2), on keyboard activation without coordinates, or when
+   * the user prefers reduced motion. */
+  function toggleThemeAnimated(e) {
+    var next = (currentTheme() === "light") ? "dark" : "light";
+    function doSwitch() {
+      applyTheme(next);
+      api("set_theme", next);
+    }
+    try {
+      if (!document.startViewTransition) { doSwitch(); return; }
+      if (window.matchMedia
+        && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        doSwitch();
+        return;
+      }
+      var x = (e && typeof e.clientX === "number") ? e.clientX : -1;
+      var y = (e && typeof e.clientY === "number") ? e.clientY : -1;
+      if (x < 0 || y < 0) {
+        var btn = $("themeBtn");
+        if (btn && btn.getBoundingClientRect) {
+          var r = btn.getBoundingClientRect();
+          x = r.left + r.width / 2;
+          y = r.top + r.height / 2;
+        } else {
+          x = window.innerWidth / 2;
+          y = window.innerHeight / 2;
+        }
+      }
+      var endR = Math.hypot(
+        Math.max(x, window.innerWidth - x),
+        Math.max(y, window.innerHeight - y));
+      var transition = document.startViewTransition(doSwitch);
+      if (!transition || !transition.ready) return;
+      transition.ready.then(function () {
+        document.documentElement.animate(
+          { clipPath: ["circle(0px at " + x + "px " + y + "px)",
+            "circle(" + endR + "px at " + x + "px " + y + "px)"] },
+          { duration: 500, easing: "ease-out",
+            pseudoElement: "::view-transition-new(root)" });
+      }).catch(function () { /* instant switch already applied */ });
+    } catch (err) {
+      doSwitch();
+    }
+  }
+
   /* Rewrite an element only when the markup actually changed.
      Rebuilding identical HTML would drop text selection, hover states and any
      pointer event already in flight, so it is skipped. */
@@ -1557,10 +1606,8 @@
     var local = readLocalTheme();
     if (local) applyTheme(local);
     var themeBtn = $("themeBtn");
-    if (themeBtn) themeBtn.addEventListener("click", function () {
-      var next = (currentTheme() === "light") ? "dark" : "light";
-      applyTheme(next);
-      api("set_theme", next);
+    if (themeBtn) themeBtn.addEventListener("click", function (e) {
+      toggleThemeAnimated(e);
     });
     renderColMenu();
     apply();
