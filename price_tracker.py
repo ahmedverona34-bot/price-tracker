@@ -1222,14 +1222,25 @@ def paginated_urls(site, url):
       `?page=` guess against such a site silently returns page 1 again for every
       page - the search "succeeds" and reports twelve products out of six
       hundred - because the unknown param is simply ignored.
+
+    `"max_pages": 0` means unlimited. The walk then ends on the evidence rather
+    than on a number: two consecutive pages that add nothing new, which is what
+    every store does at the end of its results (miamicenters repeats its last
+    page past 50, so the tail stops itself). _MAX_UNBOUNDED_PAGES still exists
+    as a backstop against a store whose page numbers never end - a site that
+    serves a fresh listing for every /page/N/ forever would otherwise walk
+    until the user closed the app, one request at a time, at someone else's
+    expense.
     """
     pages = site.get("paginate") or site.get("pages") or {}
     if not isinstance(pages, dict) or not pages:
         return [url]
     try:
-        max_pages = int(pages.get("max_pages") or 1)
+        max_pages = int(pages.get("max_pages", 1) or 0)
     except (TypeError, ValueError):
         max_pages = 1
+    if max_pages <= 0:
+        max_pages = _MAX_UNBOUNDED_PAGES
 
     # Path style first: the template has to win over any param, because a path
     # page number is the only thing this store reads.
@@ -1414,11 +1425,28 @@ def scrape_site(site, query, progress=None, enrich=True):
             time.sleep(random.uniform(*delay))
         stage = "fetch:search-page" if i == 0 else "fetch:page%d" % (i + 1)
         with PERF.stage(stage, name):
-            html, final_url = fetch_html(
-                page_url, use_playwright=site.get("use_playwright", False),
-                wait_selector=site.get("wait_selector"),
-                scroll_selector=site.get("scroll_selector"),
-                max_scrolls=site.get("max_scrolls", 0), site_key=key)
+            try:
+                html, final_url = fetch_html(
+                    page_url, use_playwright=site.get("use_playwright", False),
+                    wait_selector=site.get("wait_selector"),
+                    scroll_selector=site.get("scroll_selector"),
+                    max_scrolls=site.get("max_scrolls", 0), site_key=key)
+            except CheckpointError:
+                raise
+            except Exception:
+                # Past the last page a store answers with a 404 rather than an
+                # empty listing, and an unbounded walk always asks for one page
+                # too many. Everything collected so far is still good, so the
+                # walk ends here instead of discarding 598 rows over a 404 on
+                # page 51. Only page 1 is fatal: that is the page the whole
+                # store rests on, and the caller reports its failure.
+                if i == 0:
+                    raise
+                logging.info("%s: %s failed, stopping the walk",
+                             name, page_url)
+                PERF.note("%s: page %d failed (%s), stopping"
+                          % (name, i + 1, type(Exception).__name__))
+                break
         with PERF.stage("parse", name):
             fresh = []
             for r in _parse_cards(site, html, final_url):
@@ -1440,7 +1468,14 @@ def scrape_site(site, query, progress=None, enrich=True):
         else:
             empty_pages = 0
         if progress and len(pages) > 1 and i + 1 < len(pages):
-            progress("جاري جلب المنتجات (%d/%d)..." % (i + 2, len(pages)))
+            # An unbounded walk has no real total to count towards, so it counts
+            # up and reports what it has. Otherwise this reads "2/400" while the
+            # store actually holds 50 pages, which looks like a hang.
+            if len(pages) >= _MAX_UNBOUNDED_PAGES:
+                progress("جاري جلب المنتجات… (%d صفحة، %d منتج)"
+                         % (i + 1, len(rows)))
+            else:
+                progress("جاري جلب المنتجات (%d/%d)..." % (i + 2, len(pages)))
     if not rows:
         PERF.note("%s: page had no product cards" % name)
     if enrich and site.get("detail_pages"):
@@ -1686,6 +1721,13 @@ _NEVER_CARD = {"html", "head", "body", "script", "style", "nav", "header",
 # result pages is already heavy on someone else's server; this is here so a
 # store advertising 500 pages cannot turn one refresh into 500 requests.
 _MAX_AUTO_PAGES = 50
+
+# Backstop for "max_pages": 0 (unlimited). The walk is meant to stop on evidence
+# - two pages in a row adding nothing new - and every store does that at the end
+# of its results. This only catches the pathological case: a site that serves a
+# genuinely different listing at every page number forever, where no evidence
+# ever arrives and the walk would run until the user closed the app.
+_MAX_UNBOUNDED_PAGES = 400
 
 # A class has to be usable in a selector verbatim; storefronts emit hashed or
 # colon-separated names that soupsieve cannot take unescaped.

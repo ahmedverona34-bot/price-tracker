@@ -98,8 +98,15 @@ easier, because the hard part (the path) is then already supplied.
    off the result page's own pager: WordPress permalinks put the number in the
    path (`/ar/page/2/`) while Shopify uses `?page=2`, and guessing the wrong one
    is invisible — every request answers with page 1 again and the search
-   reports a full-looking result. Capped at `_MAX_AUTO_PAGES`, and an explicit
-   `paginate.max_pages` in the config still wins.
+   reports a full-looking result. Auto-detected walks are capped at
+   `_MAX_AUTO_PAGES`.
+
+   **`"max_pages": 0` means unlimited.** The walk then ends on evidence rather
+   than on a number: two pages in a row adding nothing new, which is what every
+   store does at the end of its results, plus a 404 past the last page. Note
+   that a 404 past the end now ends the walk *with what was collected* rather
+   than discarding the whole scrape — an unbounded walk always asks for one page
+   too many, and 598 good rows should not be lost over page 51.
 2. **Guess the selectors.** The listing is the markup structure that repeats on
    the page and carries both a price and a product link, so card candidates are
    ranked on exactly that. Within a card, the title, prices and link are read
