@@ -179,9 +179,24 @@ The window then closes and the app comes back by itself. It cannot be done
 in-process: this process is destroyed seconds after the installer starts, and
 `installer.iss`'s `[Run]` entry carries `skipifsilent`, so a silent run is
 skipped by design. What works is a VBS helper written next to the download and
-launched detached through `wscript.exe`, which polls until the installer PID
-exits and only then starts the new build. Polling for the PID is what orders the
-two — starting on a timer would race the install and could reopen the old files.
+launched detached through `wscript.exe`.
+
+**The installer PID is not the signal that the install finished.** `setup.exe`
+is only a launcher: it starts the real installer as a child process and exits
+while that child is still copying files — measured at four seconds for a 13 MB
+setup, with the app folder still being written at the moment the launcher PID
+disappeared. So the helper polls the PID only to get a small head start, then
+keeps starting the app until **the app is actually running**, backing off from 5
+to 30 seconds between attempts over about three minutes. A start against
+half-replaced files dies on its own, and each doomed attempt costs only a hidden
+window that closes by itself.
+
+If the app still does not come back, the helper says so in Arabic instead of
+exiting silently — this audience cannot tell a failed update from a program
+that was closed. The message travels in an environment variable for the same
+reason the paths do: `wscript` reads a `.vbs` as ANSI, so it cannot hold Arabic
+text. `relaunch.log` next to the download is **appended**, never truncated, so a
+failure stays readable after the next attempt.
 
 From source there is no `PriceTracker.exe` beside the script, so no relaunch is
 scheduled at all, which is the right outcome.

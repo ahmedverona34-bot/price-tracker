@@ -2396,10 +2396,17 @@ class TrackerCore:
         # passing /MERGETASKS was tried and does not fire, so it is not relied on.
         #
         # What works is a small helper script in a process that outlives this
-        # one: it polls until the installer has exited, then starts the new
-        # build. Polling for the PID is what orders the two correctly. Starting
-        # the app on a timer instead would race a 26 MB install and could open
-        # the old files again.
+        # one. It waits for the installer and then starts the new build.
+        #
+        # One thing it deliberately does NOT do is treat this installer's PID as
+        # "the install is done". setup.exe is only a launcher: it starts the
+        # real installer as a child and exits while that child is still copying
+        # files, measured at four seconds here, with the app folder still being
+        # written at the moment the launcher PID disappeared. Doing that started
+        # the app against half-replaced files every time; it died on each
+        # attempt and the user was left with nothing running and no message.
+        # So the PID is a hint, and only the app actually being alive counts as
+        # success. See _write_relaunch_helper.
         exe = os.path.join(app_dir(), "PriceTracker.exe")
         if os.path.exists(exe) and not exe.startswith("\\\\"):
             helper = os.path.join(run_dir, "relaunch_after_update.vbs")
@@ -2626,95 +2633,152 @@ def _write_relaunch_helper(path, installer_pid, setup_image, exe):
     and wscript runs it with no console at all. It must also be started with
     a plain path: see the `//?` note at the call site.
 
-    It polls for the installer's PID rather than sleeping a fixed time: the
-    install writes roughly 26 MB and the machine's speed is not ours to
-    assume, so starting the app on a timer risks opening the old files.
+    It does not use the installer's PID as the signal that the install
+    finished, because setup.exe is only a launcher and exits long before the
+    real installer has finished copying. It polls for the PID to get a small
+    head start, then keeps starting the app until the app is genuinely
+    running, and tells the user in Arabic if it never comes back.
     """
     # The script does not delete itself: the host holds it open while it
     # runs. Instead the next update removes it -- see the unlink below. The
     # path never changes, so at most one stale helper exists and it is
     # replaced before use.
-    # The paths are handed over in environment variables, not written into
-    # the script. The audience installs under an Arabic user name, and this
-    # file cannot carry that: wscript reads a .vbs as ANSI, so a path written
-    # as UTF-8 turns to mojibake inside the string literal and FileExists then
-    # never matches; written as the ANSI codepage instead, it raises
-    # UnicodeEncodeError outright on a Western machine. Environment variables
-    # have neither problem -- they are Unicode end to end -- so the script
-    # stays pure ASCII and still gets the real path. See the call site for the
-    # env this reads.
+    # The paths and the Arabic text are handed over in environment variables,
+    # not written into the script. The audience installs under an Arabic user
+    # name, and this file cannot carry that: wscript reads a .vbs as ANSI, so
+    # a path written as UTF-8 turns to mojibake inside the string literal and
+    # FileExists then never matches; written as the ANSI codepage instead, it
+    # raises UnicodeEncodeError outright on a Western machine. Environment
+    # variables have neither problem -- they are Unicode end to end -- so the
+    # script stays pure ASCII and still gets the real path and the real
+    # Arabic. See the call site for the env this reads.
     body = (
         "' Written by price_tracker.py. Relaunches the app after an update.\r\n"
-        "' Pure ASCII on purpose: the paths arrive in environment variables\r\n"
-        "' because this file is read as ANSI and cannot hold an Arabic path.\r\n"
+        "' Pure ASCII on purpose: the paths and the Arabic text arrive in\r\n"
+        "' environment variables because this file is read as ANSI and\r\n"
+        "' cannot hold either.\r\n"
         "'\r\n"
         "' Process checks go through tasklist, not WMI: on the machines this\r\n"
         "' has to survive, connecting to winmgmts:\\\\.\\root\\cimv2 fails with\r\n"
         "' \"Generic failure\" and every check would then read as \"gone\".\r\n"
         "Option Explicit\r\n"
         "\r\n"
-        "Dim fso, log, pid, waited, tries, sh, err, text\r\n"
+        "Dim fso, log, pid, waited, tries, sh, err\r\n"
         "Dim exe, exeImage, logPath, setupImage\r\n"
+        "Dim failMsg, failTitle\r\n"
         "Set fso = CreateObject(\"Scripting.FileSystemObject\")\r\n"
         "Set sh = CreateObject(\"WScript.Shell\")\r\n"
         "exe = sh.ExpandEnvironmentStrings(\"%%PRICE_TRACKER_EXE%%\")\r\n"
         "logPath = sh.ExpandEnvironmentStrings(\"%%PRICE_TRACKER_RELAUNCH_LOG%%\")\r\n"
         "setupImage = sh.ExpandEnvironmentStrings(\"%%PRICE_TRACKER_SETUP_IMAGE%%\")\r\n"
+        "failMsg = sh.ExpandEnvironmentStrings(\"%%PRICE_TRACKER_RELAUNCH_MSG%%\")\r\n"
+        "failTitle = sh.ExpandEnvironmentStrings(\"%%PRICE_TRACKER_RELAUNCH_TITLE%%\")\r\n"
         "exeImage = fso.GetFileName(exe)\r\n"
         "pid = %d\r\n"
-        "Set log = fso.CreateTextFile(logPath, True)\r\n"
-        "log.WriteLine Now & \" waiting for installer pid \" & pid\r\n"
+        "\r\n"
+        "' Appended, never truncated: a log per update is the one thing worth\r\n"
+        "' keeping from a failed update, and truncating it every time is how\r\n"
+        "' the failure that led here went unread.\r\n"
+        "If fso.FileExists(logPath) Then\r\n"
+        "  Set log = fso.OpenTextFile(logPath, 8, True, True)\r\n"
+        "Else\r\n"
+        "  Set log = fso.CreateTextFile(logPath, True, True)\r\n"
+        "End If\r\n"
+        "log.WriteLine Now & \" ---- update run, installer pid \" & pid & \" ----\"\r\n"
         "\r\n"
         "' A PID alone is not proof: Windows recycles PIDs, so the process\r\n"
         "' image name must match the setup that was just run as well.\r\n"
         "waited = 0\r\n"
         "Do While IsRunning(\"PID eq \" & pid, setupImage)\r\n"
         "  waited = waited + 1\r\n"
-        "  If waited > 300 Then Exit Do\r\n"
+        "  If waited > 300 Then\r\n"
+        "    log.WriteLine Now & \" installer wait gave up, continuing anyway\"\r\n"
+        "    Exit Do\r\n"
+        "  End If\r\n"
         "  WScript.Sleep 2000\r\n"
         "Loop\r\n"
-        "log.WriteLine Now & \" installer gone, launching the app\"\r\n"
+        "log.WriteLine Now & \" installer launcher gone\"\r\n"
         "\r\n"
-        "' A short pause lets the installer release the exe.\r\n"
-        "WScript.Sleep 2000\r\n"
+        "' This is NOT \"the install finished\". setup.exe is only a launcher:\r\n"
+        "' it starts the real installer as a child process and exits while\r\n"
+        "' that child is still copying files into the app folder -- measured\r\n"
+        "' at four seconds for a 13 MB setup, with the app directory still\r\n"
+        "' being written at the very moment the launcher PID disappeared.\r\n"
+        "'\r\n"
+        "' Treating the launcher as \"install done\" launched the app against\r\n"
+        "' half-replaced files, it died on every attempt, and the user was\r\n"
+        "' left with no app and no message. So the launcher is treated as a\r\n"
+        "' hint rather than a signal: only the app actually running counts\r\n"
+        "' as success, and the retry below covers the install finishing.\r\n"
+        "WScript.Sleep 3000\r\n"
         "\r\n"
-        "' Guard the relaunch: running a missing path pops an error box.\r\n"
-        "If Len(exe) = 0 Or Not fso.FileExists(exe) Then\r\n"
-        "  log.WriteLine Now & \" exe missing, giving up\"\r\n"
-        "  log.Close\r\n"
-        "  WScript.Quit 0\r\n"
-        "End If\r\n"
-        "\r\n"
-        "' Retry: a launch against half-replaced files dies silently.\r\n"
+        "' Retry: a start against half-replaced files dies on its own, silently.\r\n"
+        "' There is no way to ask the installer \"are you done?\", so keep\r\n"
+        "' starting the app until it is really running. Each doomed start\r\n"
+        "' costs a hidden window that closes by itself, which is cheaper\r\n"
+        "' than the app never coming back.\r\n"
         "tries = 0\r\n"
         "Do\r\n"
+        "  ' Guard the relaunch: running a missing path pops an error box.\r\n"
+        "  If Len(exe) = 0 Or Not fso.FileExists(exe) Then\r\n"
+        "    log.WriteLine Now & \" exe missing, giving up\"\r\n"
+        "    GiveUp log\r\n"
+        "  End If\r\n"
         "  sh.CurrentDirectory = fso.GetParentFolderName(exe)\r\n"
         "  err = \"\"\r\n"
         "  On Error Resume Next\r\n"
-        "  sh.Run \"\"\" & exe & \"\"\", 1, False\r\n"
+        "  sh.Run \"\"\"\" & exe & \"\"\"\", 1, False\r\n"
         "  If Err.Number <> 0 Then err = Err.Description\r\n"
         "  Err.Clear\r\n"
         "  On Error GoTo 0\r\n"
         "  If err = \"\" Then\r\n"
-        "    log.WriteLine Now & \" launch attempt \" & tries + 1 & \" ok\"\r\n"
+        "    log.WriteLine Now & \" launch attempt \" & tries + 1 & \" started\"\r\n"
         "  Else\r\n"
-        "    log.WriteLine Now & \" launch attempt \" & tries + 1 & \" \" & err\r\n"
+        "    log.WriteLine Now & \" launch attempt \" & tries + 1 & \" error: \" & err\r\n"
         "  End If\r\n"
         "  WScript.Sleep 4000\r\n"
         "  If IsRunning(\"IMAGENAME eq \" & exeImage, exeImage) Then\r\n"
-        "    log.WriteLine Now & \" app is running\"\r\n"
+        "    log.WriteLine Now & \" app is running, update complete\"\r\n"
         "    log.Close\r\n"
         "    WScript.Quit 0\r\n"
         "  End If\r\n"
         "  tries = tries + 1\r\n"
-        "  If tries > 5 Then\r\n"
-        "    log.WriteLine Now & \" FAILED to start the app\"\r\n"
-        "    log.Close\r\n"
-        "    WScript.Quit 1\r\n"
+        "  If tries > 8 Then\r\n"
+        "    log.WriteLine Now & \" no app after \" & tries & \" attempts\"\r\n"
+        "    GiveUp log\r\n"
         "  End If\r\n"
+        "  ' Wait longer after each failure, up to about three minutes in\r\n"
+        "  ' total. The waits are literals on purpose: a sleep whose\r\n"
+        "  ' argument is computed at runtime was measured both sleeping\r\n"
+        "  ' and not sleeping on the same machine, and this script has\r\n"
+        "  ' exactly one job, which is not to be clever.\r\n"
+        "  Select Case tries\r\n"
+        "    Case 1\r\n"
+        "      WScript.Sleep 5000\r\n"
+        "    Case 2\r\n"
+        "      WScript.Sleep 10000\r\n"
+        "    Case 3\r\n"
+        "      WScript.Sleep 15000\r\n"
+        "    Case Else\r\n"
+        "      WScript.Sleep 30000\r\n"
+        "  End Select\r\n"
         "Loop\r\n"
         "\r\n"
         "\r\n"
+        "' Never quit silently. This audience cannot tell an update that\r\n"
+        "' failed from a program that was closed, so when the app does not\r\n"
+        "' come back, say so in Arabic and say what to do. The sentence is\r\n"
+        "' ASCII here and arrives through the environment, for the same\r\n"
+        "' reason the paths do.\r\n"
+        "Sub GiveUp(logObj)\r\n"
+        "  logObj.WriteLine Now & \" the app never came back\"\r\n"
+        "  logObj.Close\r\n"
+        "  On Error Resume Next\r\n"
+        "  If Len(failMsg) > 0 And failMsg.Left(1) <> \"%%\" Then\r\n"
+        "    MsgBox failMsg, vbExclamation, failTitle\r\n"
+        "  End If\r\n"
+        "  WScript.Quit 1\r\n"
+        "End Sub\r\n"
         "' True when tasklist reports a process matching the filter AND the\r\n"
         "' image name. Two conditions on purpose: a bare PID can be recycled\r\n"
         "' by an unrelated process while we wait.\r\n"
@@ -2764,15 +2828,23 @@ def _write_relaunch_helper(path, installer_pid, setup_image, exe):
 def _relaunch_env(exe, setup_image, helper_path):
     """Environment for the helper's wscript process.
 
-    The paths go here rather than into the script because environment
-    variables are Unicode, and the script file cannot be: see
-    _write_relaunch_helper.
+    The paths and the Arabic sentences go here rather than into the script
+    because environment variables are Unicode, and the script file cannot
+    be: see _write_relaunch_helper.
     """
     env = dict(os.environ)
     env["PRICE_TRACKER_EXE"] = exe
     env["PRICE_TRACKER_SETUP_IMAGE"] = setup_image
     env["PRICE_TRACKER_RELAUNCH_LOG"] = os.path.join(
         os.path.dirname(helper_path), "relaunch.log")
+    # What the helper says if the app never comes back. Written here rather
+    # than in the script for the same reason as the paths: the .vbs is read
+    # as ANSI, so an Arabic literal in it would arrive as mojibake.
+    env["PRICE_TRACKER_RELAUNCH_TITLE"] = "تحديث البرنامج"
+    env["PRICE_TRACKER_RELAUNCH_MSG"] = (
+        "بعد التحديث، البرنامج لم يفتح تلقائيًا.\n\n"
+        "افتحه من قائمة ابدأ: متتبع الأسعار.\n"
+        "وإذا لم يفتح، شغّل ملف التحديث مرة أخرى.")
     return env
 
 
