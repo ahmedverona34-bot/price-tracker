@@ -1,4 +1,4 @@
-; Inno Setup script for Price Tracker.
+﻿; Inno Setup script for Price Tracker.
 ;
 ; Produces PriceTracker-Setup.exe: one file the user downloads, double-clicks,
 ; and gets a working program with no Python, no runtime, nothing to install
@@ -10,15 +10,20 @@
 ;    writes its settings, log, cache and prices.xlsx to %APPDATA%\PriceTracker
 ;    (see data_dir() in price_tracker.py), so it never needs administrator
 ;    rights and a future in-app updater can replace files without UAC.
-;  * Wizard is Arabic (ArabicLanguage.isl) with RTL mirroring.
+;  * Wizard is English and AppName is English, so the Start Menu entry, the
+;    taskbar button and Add/Remove Programs all agree. The app's own
+;    interface stays Arabic; only the installer is English.
 ;  * No "run after install" checkbox: a price tracker that auto-launches
 ;    feels like an installer, not an app.
 ;  * Uninstaller is registered, and uninstall keeps the user's settings.
 ;
 ; Build:  ISCC.exe installer.iss   (Inno Setup 6)
+;
+; Save this file as UTF-8 WITH a BOM. [InstallDelete] below carries the old
+; Arabic shortcut names, and Inno Setup only treats a BOM-less .iss as UTF-8
+; from 6.3 onward; with a BOM the Arabic reads correctly on any Inno 6.x.
 
-#define AppName "متتبع الأسعار"
-#define AppNameEn "Price Tracker"
+#define AppName "Price Tracker"
 #define AppVersion "1.2.10"
 #define AppExeName "PriceTracker.exe"
 #define AppPublisher "Price Tracker"
@@ -53,33 +58,45 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
 RestartApplications=no
-; Arabic UI
+; English UI. There is deliberately no [Languages] section: Inno Setup ships an
+; .isl for every language except English, whose messages are built into the
+; compiler. Omitting the section is what makes the wizard English, and with no
+; languages to choose from there is no language dialog and no fallback.
 LanguageDetectionMethod=uilanguage
 
-[Languages]
-; Inno Setup ships an Arabic translation. Using it makes the whole wizard
-; Arabic, which is the point: the audience never reads English.
-Name: "arabic"; MessagesFile: "compiler:Languages\Arabic.isl"
-
 [CustomMessages]
-arabic.WelcomeLabel1= متتبع الأسعار
-arabic.WelcomeLabel2= يبحث عن سعر الهاتف في كل المتاجر مرة واحدة، ويصدّر Excel.
+; Unprefixed, so these apply to the single (English) language. Prefixing with
+; a language name would fail: with no [Languages] section the language Inno
+; builds is named "default", not "english".
+WelcomeLabel1= Price Tracker
+WelcomeLabel2= Searches phone prices across every store at once, and exports them to Excel.
 
 [Tasks]
-Name: "desktopicon"; Description: "إنشاء اختصار على سطح المكتب"; GroupDescription: "اختصارات:"
-Name: "quicklaunchicon"; Description: "تثبيت في شريط الأدوات السريع"; GroupDescription: "اختصارات:"; Flags: unchecked
+Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "&Shortcuts:"
+Name: "quicklaunchicon"; Description: "Add to the &Quick Launch bar"; GroupDescription: "&Shortcuts:"; Flags: unchecked
 
 [Files]
 ; Program files from the PyInstaller onedir build.
 Source: "..\dist\PriceTracker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+; AppName was Arabic up to and including 1.2.10. Anyone updating over an older
+; install would otherwise end up with the old Arabic-named shortcuts sitting
+; next to the new English ones, because the names differ so nothing is
+; overwritten. [InstallDelete] is the first step of installation, so these
+; are gone before [Icons] recreates them under the new name.
+; {userprograms} because the install is per-user (PrivilegesRequired=lowest).
+Type: filesandordirs; Name: "{userprograms}\متتبع الأسعار"
+Type: files; Name: "{autodesktop}\متتبع الأسعار.lnk"
+Type: files; Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\متتبع الأسعار.lnk"
+
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
-Name: "{group}\إزالة {#AppName}"; Filename: "{uninstallexe}"
+Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: quicklaunchicon
 
 [Run]
-Filename: "{app}\{#AppExeName}"; Description: "تشغيل {#AppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
 
 
