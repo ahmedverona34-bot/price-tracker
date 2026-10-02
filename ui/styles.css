@@ -1712,3 +1712,145 @@ input[type="text"] { font-family: inherit; }
   font-size: var(--fs-label-md-size);
   color: var(--on-surface-variant);
 }
+
+/* ===========================================================================
+   Topbar settings — glass dropdown + side panels
+   Single type scale (13px body / 12px hint / 15px title), 18px icons.
+   =========================================================================== */
+.topbar-settings-wrap { position: relative; }
+#settingsTopBtn.active {
+  background: var(--primary-container);
+  color: var(--on-primary-container);
+  border-color: transparent;
+}
+/* Floating layer: lives on <body>, outside the blurred header, so the
+   backdrop blur samples the real page instead of a nested filter. */
+#settingsFloat { position: fixed; inset: 0; z-index: 200; pointer-events: none; }
+#settingsFloat .glass-menu,
+#settingsFloat .glass-panel { position: fixed; pointer-events: auto; margin: 0; }
+.glass-menu {
+  width: 232px;
+  padding: 8px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.05);
+  background: color-mix(in srgb, var(--surface-container-lowest) 20%, rgba(255, 255, 255, 0.05));
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 0 28px 14px rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+  z-index: 100;
+}
+.glass-menu::before,
+.glass-panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.8),
+    transparent
+  );
+  pointer-events: none;
+}
+.glass-menu::after,
+.glass-panel::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 100%;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.8),
+    transparent,
+    rgba(255, 255, 255, 0.3)
+  );
+  pointer-events: none;
+}
+[data-theme="light"] .glass-menu {
+  border-color: var(--outline-20);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.14);
+}
+.glass-menu-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--on-surface);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: start;
+}
+.glass-menu-btn svg { width: 18px; height: 18px; flex: 0 0 18px; color: var(--on-surface-variant); }
+.glass-menu-btn:hover { background: var(--surface-container-high); }
+.glass-menu-btn.active { background: var(--primary-container); color: var(--on-primary-container); }
+.glass-menu-btn.active svg { color: var(--on-primary-container); }
+.glass-menu-foot {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--outline-20);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.glass-menu-foot .btn-primary { width: 100%; height: 38px; font-size: 13px; }
+.glass-saved { font-size: 12px; color: var(--outline); text-align: center; }
+.glass-panel {
+  width: min(430px, calc(100vw - 32px));
+  max-height: min(70vh, 640px);
+  overflow-y: auto;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.05);
+  background: color-mix(in srgb, var(--surface-container-lowest) 20%, rgba(255, 255, 255, 0.05));
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 0 28px 14px rgba(255, 255, 255, 0.05);
+  z-index: 100;
+}
+[data-theme="light"] .glass-panel {
+  border-color: var(--outline-20);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.16);
+}
+.glass-panel-head { display: flex; align-items: center; gap: 12px; }
+.glass-panel-icon {
+  width: 36px; height: 36px; flex: 0 0 36px;
+  border-radius: 12px;
+  background: var(--surface-container);
+  color: var(--primary-container);
+  display: flex; align-items: center; justify-content: center;
+}
+.glass-panel-icon svg { width: 18px; height: 18px; }
+.glass-panel-head h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--on-surface); }
+.glass-panel-head p { margin: 2px 0 0; font-size: 12px; color: var(--outline); }
+.glass-panel .field-label { font-size: 13px; }
+.glass-panel .field-hint, .glass-panel .kv { font-size: 12px; }
+.glass-panel .input { height: 38px; font-size: 13px; }
+.glass-panel .col-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+@media (max-width: 900px) {
+  #settingsFloat .glass-panel { width: min(430px, calc(100vw - 32px)); }
+}

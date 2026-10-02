@@ -496,12 +496,100 @@
           p.classList.toggle("active", p.id === "page-" + btn.dataset.page);
         });
       if (btn.dataset.page === "sites") loadSites();
-      if (btn.dataset.page === "settings") {
-        loadSettings();
-        renderUpdateCard(updateInfo);   // the update card lives here
-      }
     });
   });
+
+  /* Topbar settings: floating glass menu + side panels.
+     The float layer lives on <body> (outside the blurred header) and is
+     anchored under the gear button with fixed positioning. */
+  (function settingsDropdown() {
+    var topBtn = $("settingsTopBtn"), menu = $("settingsMenu");
+    if (!topBtn || !menu) return;
+    var layer = $("settingsFloat");
+    var panels = Array.prototype.slice.call(
+      document.querySelectorAll(".glass-panel"));
+    var menuBtns = Array.prototype.slice.call(
+      menu.querySelectorAll("[data-panel]"));
+    function place() {
+      var r = topBtn.getBoundingClientRect();
+      var mw = 232;
+      var ml = Math.max(8, Math.min(r.left, window.innerWidth - mw - 8));
+      var mt = r.bottom + 10;
+      menu.style.left = ml + "px";
+      menu.style.top = mt + "px";
+      var open = null;
+      panels.forEach(function (p) {
+        if (!p.classList.contains("hidden")) open = p;
+      });
+      if (open) {
+        var pw = Math.min(430, window.innerWidth - 32);
+        if (window.innerWidth <= 900) {
+          open.style.left = ml + "px";
+          open.style.top = (mt + menu.offsetHeight + 8) + "px";
+        } else {
+          var pl = ml + mw + 12;
+          if (pl + pw > window.innerWidth - 8)
+            pl = Math.max(8, ml - pw - 12);
+          open.style.left = pl + "px";
+          open.style.top = mt + "px";
+        }
+      }
+    }
+    function closeAll() {
+      menu.classList.add("hidden");
+      topBtn.classList.remove("active");
+      topBtn.setAttribute("aria-expanded", "false");
+      panels.forEach(function (p) { p.classList.add("hidden"); });
+      menuBtns.forEach(function (b) { b.classList.remove("active"); });
+    }
+    function openMenu() {
+      menu.classList.remove("hidden");
+      topBtn.classList.add("active");
+      topBtn.setAttribute("aria-expanded", "true");
+      loadSettings();
+      renderUpdateCard(updateInfo);
+      place();
+    }
+    topBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (menu.classList.contains("hidden")) openMenu();
+      else closeAll();
+    });
+    function openPanel(b) {
+      var panel = document.getElementById(b.dataset.panel);
+      var wasOpen = panel && !panel.classList.contains("hidden");
+      panels.forEach(function (p) { p.classList.add("hidden"); });
+      menuBtns.forEach(function (x) { x.classList.remove("active"); });
+      if (panel && !wasOpen) {
+        panel.classList.remove("hidden");
+        b.classList.add("active");
+        loadSettings();
+        renderUpdateCard(updateInfo);
+        place();
+      }
+    }
+    menuBtns.forEach(function (b) {
+      b.addEventListener("click", function (e) {
+        e.stopPropagation();
+        openPanel(b);
+      });
+      b.addEventListener("mouseenter", function () {
+        if (menu.classList.contains("hidden")) return;
+        openPanel(b);
+      });
+    });
+    document.addEventListener("click", function (e) {
+      if (e.target === topBtn || topBtn.contains(e.target)) return;
+      if (layer && layer.contains(e.target)) return;
+      closeAll();
+    });
+    window.addEventListener("resize", function () {
+      if (!menu.classList.contains("hidden")) place();
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") closeAll();
+    });
+  })();
 
   function exclWords() {
     return ($("excludeBox").value || "").split(",")

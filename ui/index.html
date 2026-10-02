@@ -39,9 +39,6 @@ try {
         <button class="rail-btn hover-pop" data-page="sites" title="مصادر البيانات" aria-label="مصادر البيانات">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg>
         </button>
-        <button class="rail-btn hover-pop" data-page="settings" title="الإعدادات" aria-label="الإعدادات">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.06-.4.1-.8.1-1.2z"/></svg>
-        </button>
       </nav>
     </div>
     <div class="rail-bottom">
@@ -73,9 +70,10 @@ try {
           <svg id="themeIconMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
           <svg id="themeIconSun" class="hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
         </button>
-        <div class="engine-pill" id="enginePill" title="حالة محرك الاستخراج">
-          <span class="dot-wrap"><span class="dot idle" id="engineDot"></span><span class="ping-ring" aria-hidden="true"></span></span>
-          <span id="engineText">محرك الاستخراج: …</span>
+        <div class="topbar-settings-wrap">
+          <button id="settingsTopBtn" class="theme-btn" title="الإعدادات" aria-label="الإعدادات" aria-haspopup="true" aria-expanded="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.06-.4.1-.8.1-1.2z"/></svg>
+          </button>
         </div>
         <div class="avatar" title="حساب المستخدم" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg>
@@ -276,38 +274,43 @@ try {
       </div>
     </section>
 
-    <!-- ================= PAGE: settings ================= -->
-    <section id="page-settings" class="page">
-      <div class="page-inner">
-        <!-- Page header: breadcrumb, title, one-line summary -->
-        <div class="page-head">
-          <div class="crumbs" aria-label="مسار الصفحة">
-            <span class="crumb muted">النظام</span>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
-            <span class="crumb current">الإعدادات</span>
-          </div>
-          <h1 class="page-title">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.06-.4.1-.8.1-1.2z"/></svg>
-            الإعدادات
-          </h1>
-          <p class="page-intro">إدارة تفضيلات البحث والاستخراج والتحديث التلقائي بكل سهولة.</p>
-        </div>
+        <!-- settings moved to topbar glass menu -->
 
-        <div class="settings-grid">
 
-          <!-- Section 1: filtering and exclusions -->
-          <section class="card set-card">
-            <div class="card-head">
-              <span class="card-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8z"/></svg>
-              </span>
-              <div>
-                <h2>فلترة النتائج والاستبعاد</h2>
-                <p>تحديد الكلمات المستثناة والحدود السعرية الدنيا لتنقية نتائج البحث.</p>
-              </div>
+  </div>
+</div>
+<div id="settingsFloat">
+<div id="settingsMenu" class="glass-menu hidden" role="menu" aria-label="قائمة الإعدادات">
+            <button class="glass-menu-btn" data-panel="panel-filters" role="menuitem">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8z"/></svg>
+              <span>فلترة النتائج</span>
+            </button>
+            <button class="glass-menu-btn" data-panel="panel-refresh" role="menuitem">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14-4.5L4 9"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14 4.5L20 15"/><path d="M20 20v-5h-5"/></svg>
+              <span>التحديث التلقائي</span>
+            </button>
+            <button class="glass-menu-btn" data-panel="panel-update" role="menuitem">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+              <span>تحديث البرنامج</span>
+            </button>
+            <button class="glass-menu-btn" data-panel="panel-appearance" role="menuitem">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>
+              <span>المظهر</span>
+            </button>
+            <div class="glass-menu-foot">
+              <button id="saveAdvBtn" class="btn-primary">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+                <span>حفظ الإعدادات</span>
+              </button>
+              <span class="glass-saved">آخر حفظ: <span id="settingsSavedAt">…</span></span>
             </div>
-
-            <div class="card-body">
+          </div>
+          <div id="settingsPanels">
+            <div class="glass-panel hidden" id="panel-filters" role="dialog" aria-label="فلترة النتائج">
+              <div class="glass-panel-head">
+                <span class="glass-panel-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8z"/></svg></span>
+                <div><h3>فلترة النتائج والاستبعاد</h3><p>الكلمات المستبعدة والحد الأدنى للسعر.</p></div>
+              </div>
               <div class="field">
                 <div class="field-head">
                   <label class="field-label" for="exclAdd">الكلمات المستبعدة</label>
@@ -315,10 +318,8 @@ try {
                 </div>
                 <div class="tag-input-row">
                   <div class="input-icon-wrap">
-                    <span class="input-icon">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg>
-                    </span>
-                    <input id="exclAdd" type="text" class="input has-icon-end" placeholder="أدخل كلمة للاستبعاد (مثل: كابل، جراب) واضغط Enter…" aria-label="إضافة كلمة مستبعدة">
+                    <span class="input-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg></span>
+                    <input id="exclAdd" type="text" class="input has-icon-end" placeholder="كلمة للاستبعاد واضغط Enter…" aria-label="إضافة كلمة مستبعدة">
                   </div>
                   <button id="exclAddBtn" class="btn-outline add-btn" type="button">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
@@ -328,56 +329,34 @@ try {
                 <div id="exclChips" class="chips tag-box" aria-label="الكلمات المستبعدة"></div>
                 <textarea id="excludeBox" rows="3" dir="rtl" aria-label="كلمات مستبعدة" class="hidden"></textarea>
               </div>
-
               <div class="field">
                 <label class="field-label" for="minBox">الحد الأدنى للسعر</label>
                 <div class="input-icon-wrap">
                   <input id="minBox" type="text" inputmode="numeric" class="input has-suffix mono" placeholder="مثال: 15000" aria-label="أقل سعر يدوي">
                   <span class="input-suffix" aria-hidden="true">ج.م</span>
                 </div>
-                <span class="field-hint">تجاهل المنتجات والإكسسوارات الأقل من هذا السعر.</span>
+                <span class="field-hint">تجاهل المنتجات الأقل من هذا السعر.</span>
               </div>
             </div>
-          </section>
-
-          <!-- Section 2: automatic refresh -->
-          <section class="card set-card">
-            <div class="card-head">
-              <span class="card-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14-4.5L4 9"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14 4.5L20 15"/><path d="M20 20v-5h-5"/></svg>
-              </span>
-              <div>
-                <h2>التحديث التلقائي والتشغيل</h2>
-                <p>التحكم في وتيرة إعادة سحب الأسعار المباشرة.</p>
+            <div class="glass-panel hidden" id="panel-refresh" role="dialog" aria-label="التحديث التلقائي">
+              <div class="glass-panel-head">
+                <span class="glass-panel-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14-4.5L4 9"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14 4.5L20 15"/><path d="M20 20v-5h-5"/></svg></span>
+                <div><h3>التحديث التلقائي</h3><p>وتيرة إعادة سحب الأسعار المباشرة.</p></div>
+              </div>
+              <div class="segmented wrap pill-lift-group" id="refreshSeg" role="group" aria-label="فترة التحديث">
+                <button data-sec="60">كل دقيقة</button>
+                <button data-sec="300">كل 5 دقائق</button>
+                <button data-sec="600" class="active">كل 10 دقائق</button>
+                <button data-sec="900">كل 15 دقيقة</button>
+                <button data-sec="1800">كل 30 دقيقة</button>
+                <button data-sec="0">يدوي فقط</button>
               </div>
             </div>
-            <div class="card-body">
-              <div class="field">
-                <span class="field-label">فترة إعادة التحديث التلقائي</span>
-                <div class="segmented wrap pill-lift-group" id="refreshSeg" role="group" aria-label="فترة التحديث">
-                  <button data-sec="60">كل دقيقة</button>
-                  <button data-sec="300">كل 5 دقائق</button>
-                  <button data-sec="600" class="active">كل 10 دقائق</button>
-                  <button data-sec="900">كل 15 دقيقة</button>
-                  <button data-sec="1800">كل 30 دقيقة</button>
-                  <button data-sec="0">يدوي فقط</button>
-                </div>
+            <div class="glass-panel hidden" id="panel-update" role="dialog" aria-label="تحديث البرنامج">
+              <div class="glass-panel-head">
+                <span class="glass-panel-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></span>
+                <div><h3>تحديث البرنامج</h3><p>التحقق من نسخة أحدث وتثبيتها.</p></div>
               </div>
-            </div>
-          </section>
-
-          <!-- Section 3: program update -->
-          <section class="card set-card">
-            <div class="card-head">
-              <span class="card-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
-              </span>
-              <div>
-                <h2>تحديث البرنامج</h2>
-                <p>التحقق من وجود نسخة أحدث وتثبيتها.</p>
-              </div>
-            </div>
-            <div class="card-body">
               <p id="updateVerLine" class="kv">الإصدار المثبّت: …</p>
               <p id="updateStateLine" class="kv">لم يتم الفحص بعد.</p>
               <div class="btn-row">
@@ -387,28 +366,18 @@ try {
                 </button>
                 <button id="installUpdateBtn" class="btn-primary hidden">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M4 20h16"/></svg>
-                  <span>تنزيل التحديث والبدء تلقائيًا</span>
+                  <span>تنزيل وتثبيت</span>
                 </button>
               </div>
             </div>
-          </section>
-
-          <!-- Section 5: appearance (terminal palettes + font size) -->
-          <section class="card set-card">
-            <div class="card-head">
-              <span class="card-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>
-              </span>
-              <div>
-                <h2>المظهر</h2>
-                <p>ألوان مستوحاة من terminalcolors.com وحجم خط واحد لكل الواجهة.</p>
+            <div class="glass-panel hidden" id="panel-appearance" role="dialog" aria-label="المظهر">
+              <div class="glass-panel-head">
+                <span class="glass-panel-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg></span>
+                <div><h3>المظهر</h3><p>لوحة الألوان وحجم الخط.</p></div>
               </div>
-            </div>
-            <div class="card-body">
               <div class="field">
                 <span class="field-label">لوحة الألوان</span>
                 <div id="appearGrid" class="appear-grid"></div>
-                <span class="field-hint">تُحفظ تلقائيًا وتظهر من أول تشغيل.</span>
               </div>
               <div class="field">
                 <div class="field-head">
@@ -418,34 +387,11 @@ try {
                 <div class="font-slider-row">
                   <input id="fontScale" type="range" min="0" max="2" step="1" value="1" aria-label="حجم الخط">
                 </div>
-                <span class="field-hint">صغير / متوسط / كبير — يغيّر كل نصوص الواجهة.</span>
               </div>
             </div>
-          </section>
-        </div>
-      </div>
-
-      <!-- Bottom docked action bar, as in the reference. Padding leaves room
-           so the last card is never hidden behind it. -->
-      <div class="set-bar">
-        <div class="set-bar-inner">
-          <div class="set-bar-note">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-            <span>آخر حفظ للإعدادات: <span id="settingsSavedAt">…</span></span>
           </div>
-          <div class="set-bar-actions">
-            <button id="saveAdvBtn" class="btn-primary">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
-              <span>حفظ الإعدادات</span>
-            </button>
-          </div>
-        </div>
-      </div>
-    </section>
-
-  </div>
 </div>
-<div id="toasts" aria-live="polite"></div>
+  <div id="toasts" aria-live="polite"></div>
 <script src="app.js"></script>
 </body>
 </html>
