@@ -217,6 +217,41 @@ offer the same build forever.
 carries its own `.git` and is never picked up as a submodule. Editing
 `latest.txt` through it and pushing from here is the intended workflow.
 
+## The download button on the site
+
+The marketing site (**price-tracker-site**, deployed on Vercel) has a "حمّل
+البرنامج" button that serves the installer **from the site itself**, not from
+GitHub Releases. A visitor clicks once and the setup file comes down; they never
+land on a release page and have to pick the right file themselves.
+
+The site keeps its own copy of the newest setup and pulls it straight out of
+this repo's `dist-installer/`. Publishing a new build is a file copy:
+
+```bat
+cd <path>\price-tracker-site
+npm run stage                                  :: newest setup -> public/downloads/latest.exe
+git add public/downloads
+git commit -m "Stage installer <ver>"
+git push                                       :: Vercel redeploys automatically
+```
+
+`npm run stage` picks the highest `PriceTracker-Setup-<ver>.exe` by **version
+number, not file time** (so 1.2.11 beats 1.2.8), and warns when that version and
+`APP_VERSION` here disagree — the same mismatch that once shipped a 1.2.10
+installer wrapping a 1.2.9-era binary.
+
+The served name is fixed (`latest.exe`) on purpose: publishing a build never
+changes the URL, so no link in an old email or a cached page goes dead. The
+button's `download` attribute hands the browser the real versioned filename, so
+the file lands on disk as `PriceTracker-Setup-1.2.11.exe`, and the version and
+size printed under the button are read from the same staged file.
+
+**The 12 MB binary is committed to the site repo on purpose.** Deployment builds
+from a git clone, so an installer that was git-ignored would leave the deployed
+site carrying the button and not the file, and the download would 404. The
+stage script checks for that rule and warns rather than leaving it to be
+discovered in production.
+
 ## License
 
 **No license has been chosen yet.** The repository is public but carries no
