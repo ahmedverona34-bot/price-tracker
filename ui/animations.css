@@ -61,7 +61,9 @@
    Project glue — positioning + theme tokens only.
    =========================================================================== */
 
-/* Light theme glow follows the light secondary token (#16a34a). */
+/* Default light-theme discount glow, following the light secondary token
+   (#16a34a). The appearance presets carry their own --accent-rgb in
+   tokens.css, so this only covers appearance = default. */
 [data-theme="light"] { --accent-rgb: 22, 163, 74; }
 
 /* Ping-ring wrapper: relatively positioned, sized by the dot it holds; the
@@ -107,6 +109,30 @@ input.custom-checkbox:checked { background-image: none; }
       animation-timeline: view(y 56px 0px);
       animation-range: entry 0% entry 35%;
     }
+  }
+}
+
+/* Search results landing on the skeleton: the same fade-up keyframe the window
+   already uses, with a short per-row stagger. Scroll-driven row reveals cannot
+   cover this case — rows drawn while already inside the viewport start at their
+   final state, so a result set that arrives under the user's eyes would just
+   pop in. Only the first screenful is staggered; past that the rows are below
+   the fold and the scroll timeline takes over as they scroll in. */
+@media (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: view()) {
+    #grid tbody.landed tr {
+      animation: row-fade-in 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+      animation-timeline: auto;
+    }
+    #grid tbody.landed tr:nth-child(1) { animation-delay: 0ms; }
+    #grid tbody.landed tr:nth-child(2) { animation-delay: 45ms; }
+    #grid tbody.landed tr:nth-child(3) { animation-delay: 90ms; }
+    #grid tbody.landed tr:nth-child(4) { animation-delay: 135ms; }
+    #grid tbody.landed tr:nth-child(5) { animation-delay: 180ms; }
+    #grid tbody.landed tr:nth-child(6) { animation-delay: 225ms; }
+    #grid tbody.landed tr:nth-child(7) { animation-delay: 270ms; }
+    #grid tbody.landed tr:nth-child(8) { animation-delay: 315ms; }
+    #grid tbody.landed tr:nth-child(n+9) { animation-delay: 350ms; }
   }
 }
 
