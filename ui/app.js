@@ -429,7 +429,6 @@
   function apply(opts) {
     try {
       render();
-      rvScan();
     } catch (e) {
       reportJsError("render failed: " + e);
       toast("توجد مشكلة في عرض الجدول، يُرجى مراجعة ملف app.log");
@@ -439,37 +438,6 @@
   function setState(patch, opts) {
     Object.keys(patch).forEach(function (k) { state[k] = patch[k]; });
     apply(opts);
-  }
-
-  /* Scroll-continuous reveals. Items render fully visible; one shared
-     IntersectionObserver adds .rv-play while an item is in the viewport
-     and removes it when it leaves, so the fade-up entrance replays on
-     every scroll pass instead of firing once. Pure class toggle, so a
-     re-render never flashes hidden content. */
-  var rvIO = null;
-  function rvSetup() {
-    if (rvIO || !("IntersectionObserver" in window)) return;
-    rvIO = new IntersectionObserver(function (entries) {
-      entries.forEach(function (en) {
-        en.target.classList.toggle("rv-play", !!en.isIntersecting);
-      });
-    }, { threshold: 0 });
-  }
-  function rvScan() {
-    rvSetup();
-    var items = document.querySelectorAll(".rv");
-    if (!rvIO) {
-      Array.prototype.forEach.call(items, function (el) {
-        el.classList.add("rv-play");
-      });
-      return;
-    }
-    // Disconnect first: observed rows from a previous render are detached
-    // nodes by now and must not be held.
-    rvIO.disconnect();
-    Array.prototype.forEach.call(items, function (el) {
-      rvIO.observe(el);
-    });
   }
 
   /* ------------------------------------------------------------------ *
@@ -595,26 +563,6 @@
       });
     });
 
-  function renderDefaultCols() {
-    setHTML($("defaultCols"), COLUMNS.map(function (c) {
-      return '<label class="col-opt"><input type="checkbox" class="custom-checkbox" data-col="' + c.key + '"'
-        + (state.cols.indexOf(c.key) >= 0 ? " checked" : "")
-        + ' aria-label="' + esc(c.label) + '">'
-        + "<span>" + esc(c.label) + "</span></label>";
-    }).join(""));
-    Array.prototype.forEach.call(
-      $("defaultCols").querySelectorAll("input"), function (cb) {
-        cb.addEventListener("change", function () {
-          var list = Array.prototype.map.call(
-            $("defaultCols").querySelectorAll("input:checked"),
-            function (x) { return x.dataset.col; });
-          if (!list.length) { cb.checked = true; return; }
-          setState({ cols: list });
-          api("set_columns", list).then(function () { renderColMenu(); });
-        });
-      });
-  }
-
   function loadSettings() {
     api("get_settings").then(function (s) {
       if (!s) return;
@@ -624,7 +572,6 @@
         $("minBox").value = s.min_price || "";
       renderExclChips();
       renderRefreshSeg(s.refresh_sec == null ? 600 : s.refresh_sec);
-      renderDefaultCols();
       renderAppearGrid(applyAppearance(s.appearance || "default"));
       applyFontScale(s.font_scale || "medium");
     });
@@ -723,24 +670,23 @@
       Math.round(100 - avg * 4)));
     setHTML($("siteStats"), [
       statCard({ label: "إجمالي المتاجر الممسوحة", value: String(sites.length),
-        foot: "100% مفعّلة", icon: "stack", tone: "blue", pct: 100, rd: 0 }),
+        foot: "100% مفعّلة", icon: "stack", tone: "blue", pct: 100 }),
       statCard({ label: "المصادر النشطة في العمل", value: String(on.length),
         foot: on.length ? Math.round(100 * on.length / sites.length) + "% مفعّلة"
                         : "لا يوجد مفعّل",
-        icon: "check", tone: "green", green: true, rd: 1,
+        icon: "check", tone: "green", green: true,
         pct: sites.length ? Math.round(100 * on.length / sites.length) : 0 }),
       statCard({ label: "متوسط سرعة الاستخراج",
         value: avg == null ? "—" : avg + " ثانية",
         foot: avg == null ? "بانتظار أول بحث" : "لكل موقع",
         icon: "speed", tone: speed == null ? "" : speed >= 80 ? "green"
               : speed >= 50 ? "amber" : "",
-        pct: speed, footTone: speed == null ? "" : speed >= 50 ? "" : "amber",
-        rd: 2 }),
+        pct: speed, footTone: speed == null ? "" : speed >= 50 ? "" : "amber" }),
       statCard({ label: "نسبة نجاح البحث والمطابقة",
         value: rate == null ? "—" : rate + "%",
         foot: ok + " موقع شغال الآن", icon: "check",
         tone: rate == null ? "" : rate >= 80 ? "green" : rate >= 50 ? "amber" : "",
-        pct: rate == null ? 0 : rate, rd: 3 })
+        pct: rate == null ? 0 : rate })
     ].join(""));
   }
 
@@ -776,10 +722,9 @@
       var shown = q ? sites.filter(function (s) {
         return (s.name + " " + (s.pattern || "")).toLowerCase().indexOf(q) >= 0;
       }) : sites;
-      setHTML($("sitesBody"), shown.map(function (s, i) {
+      setHTML($("sitesBody"), shown.map(function (s) {
         var dot = s.status || (s.enabled ? "idle" : "off");
-        var delay = Math.min(i, 14) * 35;
-        return '<tr class="rv" style="--rd:' + delay + 'ms">'
+        return "<tr>"
           + '<td class="c-pick"><span class="site-badge" aria-hidden="true">'
           + esc(s.name.slice(0, 2)) + "</span></td>"
           + '<td class="c-site"><b>' + esc(s.name) + "</b></td>"
@@ -899,18 +844,13 @@
   /* ------------------------------------------------------------------ *
    * Column menu
    * ------------------------------------------------------------------ */
-  /* The trigger lives inside the search field, so the menu is placed under it
-     with inline-start/end rather than left, to stay on the right in RTL. */
+  /* The menu is anchored to its trigger in CSS (absolute in the wrap),
+     so opening it is a plain toggle — no viewport math to drift. */
   function closeColMenu() { $("colMenu").classList.add("hidden"); }
 
   $("colBtn").addEventListener("click", function (e) {
     e.stopPropagation();
-    var menu = $("colMenu");
-    if (!menu.classList.contains("hidden")) { closeColMenu(); return; }
-    var r = $("colBtn").getBoundingClientRect();
-    menu.style.top = (r.bottom + 6) + "px";
-    menu.style.insetInlineEnd = Math.max(8, window.innerWidth - r.right) + "px";
-    menu.classList.remove("hidden");
+    $("colMenu").classList.toggle("hidden");
   });
   window.addEventListener("resize", closeColMenu);
   document.addEventListener("click", function (e) {
@@ -1319,7 +1259,7 @@
     var slice = v.rows;
     var cols = orderCols(state.cols);
 
-    setHTML(tb, slice.map(function (r, i) {
+    setHTML(tb, slice.map(function (r) {
       var tds = '<td class="c-pick">'
         + '<input type="checkbox" class="custom-checkbox" data-pick="' + esc(r.link) + '"'
         + (state.selected[r.link] ? " checked" : "")
@@ -1330,12 +1270,8 @@
         return '<td class="' + cls.trim() + '"' + extra + ">"
           + cellHtml(r, key) + "</td>";
       }).join("");
-      // Scroll-continuous reveal: per-row stagger via --rd, capped so long
-      // result sets stay snappy. The observer adds .rv-play in the viewport.
-      var delay = Math.min(i, 14) * 35;
       return '<tr data-link="' + esc(r.link) + '"'
-        + ' class="rv' + (state.selected[r.link] ? " selected" : "") + '"'
-        + ' style="--rd:' + delay + 'ms"'
+        + (state.selected[r.link] ? ' class="selected"' : "")
         + ">" + tds + "</tr>";
     }).join(""));
 
@@ -1407,9 +1343,7 @@
     var bar = opt.pct == null ? ""
       : '<span class="stat-bar"><i class="' + (opt.tone || "") + '" style="width:'
         + opt.pct + '%"></i></span>';
-    var rd = Math.min(opt.rd || 0, 3) * 60;
-    return '<div class="stat-card rv' + (opt.flat ? " flat" : "") + '"'
-      + ' style="--rd:' + rd + 'ms">'
+    return '<div class="stat-card' + (opt.flat ? " flat" : "") + '">'
       + '<div class="stat-top"><span class="stat-label">' + esc(opt.label)
       + '</span><span class="stat-icon ' + (opt.tone || "") + '">'
       + ICON[opt.icon] + "</span></div>"

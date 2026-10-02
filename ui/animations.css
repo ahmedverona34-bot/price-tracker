@@ -13,16 +13,28 @@
 @keyframes radar-ping { 0% { transform: scale(0.95); opacity: 0.8; } 50% { transform: scale(2.2); opacity: 0; } 100% { transform: scale(2.4); opacity: 0; } }
 @keyframes spin-slow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 @keyframes subtle-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1.5px); } }
-@keyframes discount-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0); } 50% { box-shadow: 0 0 10px 1px rgba(var(--accent-rgb), 0.25); } }
 @keyframes row-fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+/* Badge glow breathes opacity only (compositor layer, zero repaint): the
+   shadow itself is static paint on a pseudo element. box-shadow animation
+   is what was janking scroll with dozens of badges on screen. */
+@keyframes disc-breathe { 0%, 100% { opacity: 0; } 50% { opacity: 0.8; } }
 
 .ping-ring { animation: radar-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite; }
 .sync-rotate { animation: spin-slow 12s linear infinite; }
 .float-subtle { animation: subtle-float 3s ease-in-out infinite; }
-.discount-pulse { animation: discount-glow 3s ease-in-out infinite; }
-.table-row-animated { animation: row-fade-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both; }
-
-.tr-delay-1 { animation-delay: 40ms; } .tr-delay-2 { animation-delay: 80ms; } .tr-delay-3 { animation-delay: 120ms; } .tr-delay-4 { animation-delay: 160ms; } .tr-delay-5 { animation-delay: 200ms; } .tr-delay-6 { animation-delay: 240ms; } .tr-delay-7 { animation-delay: 280ms; } .tr-delay-8 { animation-delay: 320ms; } .tr-delay-9 { animation-delay: 360ms; } .tr-delay-10 { animation-delay: 400ms; } .tr-delay-11 { animation-delay: 440ms; } .tr-delay-12 { animation-delay: 480ms; } .tr-delay-13 { animation-delay: 520ms; } .tr-delay-14 { animation-delay: 560ms; } .tr-delay-15 { animation-delay: 600ms; }
+.discount-pulse { position: relative; }
+.discount-pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: 0 0 10px 1px rgba(var(--accent-rgb), 0.25);
+  opacity: 0;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .discount-pulse::after { animation: disc-breathe 4s ease-in-out infinite; }
+}
 
 .custom-checkbox { appearance: none; background-color: #1e2024; border: 1.5px solid #434655; border-radius: 4px; width: 15px; height: 15px; display: inline-grid; place-content: center; cursor: pointer; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); position: relative; }
 .custom-checkbox:hover { border-color: #b4c5ff; transform: scale(1.08); }
@@ -69,21 +81,34 @@
    background; everything else (size, colors) already agrees with the tokens. */
 input.custom-checkbox:checked { background-image: none; }
 
-/* Light theme checkbox surfaces follow the light tokens. */
-[data-theme="light"] input.custom-checkbox { background-color: var(--surface-container); border-color: var(--outline-variant); }
+/* Light theme checkbox surfaces follow the light tokens — unchecked only.
+   Scoped with :not(:checked) on purpose: the plain-class selector ties with
+   the base input[type="checkbox"]:checked rule and would otherwise win on
+   source order, leaving checked boxes white-on-white (invisible check). */
+[data-theme="light"] input.custom-checkbox:not(:checked) { background-color: var(--surface-container); border-color: var(--outline-variant); }
 [data-theme="light"] input.custom-checkbox:hover { border-color: var(--primary-container); }
 
 /* ===========================================================================
-   Scroll-continuous reveals — the premium layer.
+   Scroll-linked reveals (primary system).
    ---------------------------------------------------------------------------
-   Items render fully visible by default; a single IntersectionObserver adds
-   .rv-play while an item intersects the viewport and removes it when it
-   leaves, so the fade-up entrance replays on every scroll pass instead of
-   firing once on first paint. Pure class toggle (no inline hiding), so
-   re-renders never flash. Per-item stagger comes from --rd, set inline by
-   the JS that renders the item. Vertical-only motion: RTL-safe.
-   The global reduced-motion rule above already collapses this to instant. */
-.rv-play { animation: row-fade-in 0.38s cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: var(--rd, 0ms); }
+   Progress-tied instead of time-tied: each row's fade-up is driven by its
+   own position in the scrollport, so fast scrolling never leaves content
+   behind and no JS class toggling runs at all. Re-renders land rows in
+   their final state immediately when already in view. The sticky thead
+   covers ~40px, hence the 56px top inset so rows finish revealing just as
+   they clear the header. No per-row delays: meaningless on a timeline.
+   Without view() support (or under reduced motion) the @supports gate
+   simply doesn't apply and rows render normally — no JS fallback needed.
+   Vertical-only motion: RTL-safe. */
+@media (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: view()) {
+    #grid tbody tr, #sitesTable tbody tr {
+      animation: row-fade-in linear both;
+      animation-timeline: view(y 56px 0px);
+      animation-range: entry 0% entry 35%;
+    }
+  }
+}
 
 /* First-paint entrances for the static page sections, reusing the same
    fade-up keyframe so the whole window speaks one motion language. */
