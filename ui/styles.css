@@ -1287,10 +1287,11 @@ input[type="text"] { font-family: inherit; }
 /* ===========================================================================
    Settings page — port of the reference "Streamlined Settings Form Grid".
 
-   Same shape as the reference: breadcrumb header, a narrow column of
-   section cards each with an icon well + heading pair, and a docked action
-   bar pinned to the bottom. No control is added: the sections, their ids
-   and their events are the ones the app already had, only re-laid-out.
+   Same shape as the reference: breadcrumb header, section cards each with an
+   icon well + heading pair, and a docked action bar pinned to the bottom. No
+   control is added: the sections, their ids and their events are the ones the
+   app already had, only re-laid-out. The cards run in two balanced columns so
+   the window is not left half empty.
 
    The one thing the reference has that this page does not is a fixed
    bottom bar, so the last card needs clearance or the bar would sit on
@@ -1313,11 +1314,28 @@ input[type="text"] { font-family: inherit; }
 .crumb.muted { color: var(--outline); }
 .crumb.current { color: var(--primary-container); }
 
+/* Two balanced columns instead of one narrow stack.
+
+   The page-inner is a flex column, so a width-capped block sat against the
+   RTL start edge and left the whole other half of the window empty. Multi-
+   column flow is used rather than a two-track grid on purpose: the four
+   cards are very uneven (the filtering card is several times the height of
+   the others), and grid tracks are sized by their tallest item, which would
+   just move the hole from the page margin to the middle of the grid. Columns
+   break where the content actually ends, so the two sides stay level and
+   re-balance by themselves whenever the excluded-word list grows or shrinks.
+   DOM order is column order, so tab order still follows what is on screen. */
 .settings-grid {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-xl);
-  max-width: 56rem;
+  column-count: 2;
+  column-gap: var(--space-xl);
+}
+/* break-inside keeps a card whole; the margin is the vertical gap between
+   cards inside a column, left uniform so both columns end at the same
+   height. A last-child reset would only shorten whichever column the last
+   card lands in, which is the one column the balancer sized from. */
+.set-card {
+  break-inside: avoid;
+  margin-bottom: var(--space-xl);
 }
 
 /* section card */
@@ -1604,6 +1622,8 @@ input[type="text"] { font-family: inherit; }
   :root { --gutter-desktop: var(--gutter); }
   tbody td.c-title { max-width: 300px; }
   #q { padding-inline-start: 2.5rem; }
+  /* Two columns need the width; below this the cards go back to one stack. */
+  .settings-grid { column-count: 1; }
 }
 
 @media (max-width: 860px) {
