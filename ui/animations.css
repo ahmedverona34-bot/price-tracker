@@ -81,8 +81,11 @@
    background; everything else (size, colors) already agrees with the tokens. */
 input.custom-checkbox:checked { background-image: none; }
 
-/* Light theme checkbox surfaces follow the light tokens. */
-[data-theme="light"] input.custom-checkbox { background-color: var(--surface-container); border-color: var(--outline-variant); }
+/* Light theme checkbox surfaces follow the light tokens — unchecked only.
+   Scoped with :not(:checked) on purpose: the plain-class selector ties with
+   the base input[type="checkbox"]:checked rule and would otherwise win on
+   source order, leaving checked boxes white-on-white (invisible check). */
+[data-theme="light"] input.custom-checkbox:not(:checked) { background-color: var(--surface-container); border-color: var(--outline-variant); }
 [data-theme="light"] input.custom-checkbox:hover { border-color: var(--primary-container); }
 
 /* ===========================================================================
