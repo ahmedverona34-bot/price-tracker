@@ -82,10 +82,17 @@ configured: they paste the shop's link and the app works out how to read it.
 Pasting either the home page or a working search URL works — a search URL is
 easier, because the hard part (the path) is then already supplied.
 
-1. **Find the search URL.** Tries the conventional patterns (`?q=`,
-   `/search?q=`, `/catalogsearch/result/?q=` for Magento, WooCommerce's
-   `?post_type=product&s=`, …), most conventional first, up to
-   `_MAX_SEARCH_PROBES` requests with a short pause between each.
+1. **Find the search URL.** The store's own search form is read first, because
+   that is where the parameter name is written down. `miamicenters.com` 404s on
+   every conventional pattern (`?q=`, `/search?q=`, `/catalogsearch/result/?q=`)
+   and answers on `?s=`, which nothing in the markup would have revealed. The
+   conventional patterns follow, for stores that ship no form. Up to
+   `_MAX_SEARCH_PROBES` requests, with a short pause between each.
+
+   A WordPress storefront needs the product filter as well: bare `?s=iphone`
+   matches every post type and returns blog posts with no prices in them, while
+   `?s=iphone&post_type=product` returns the listing. The form's other params
+   are carried over, which is how that filter is picked up.
 2. **Guess the selectors.** The listing is the markup structure that repeats on
    the page and carries both a price and a product link, so card candidates are
    ranked on exactly that. Within a card, the title, prices and link are read
@@ -132,6 +139,11 @@ circumventing an access control the store's owner put in place.
   `٫` U+066B). 2B's Arabic pages write "٦٧٬٧٩٩ ج.م."; without the fold that
   reads as `67.0` instead of `67799.0` — wrong by a factor of a thousand, with
   nothing reporting an error.
+- **A price is not a number with words attached.** `dream2000`'s title link
+  reads "أبل آيفون 15" and `parse_price` returns 15 from the tail of it, so an
+  iPhone 15 priced at £69,400 was showing as 15. `_looks_pricey` requires the
+  text to be digits, separators and a currency mark; a category tile reading
+  "1035 products" is rejected the same way.
 
 ## Building a release
 

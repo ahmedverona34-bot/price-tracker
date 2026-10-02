@@ -1481,8 +1481,24 @@ _SEARCH_URL_PATTERNS = (
     "?find={q}",
     "?searchkey={q}",
     "?term={q}",
+    # WordPress storefronts (WooCommerce, and the Elementor-based themes like
+    # miamicenters) match every post type by default, so `?s=iphone` returns
+    # blog posts as well as products and the page has no prices in it at all.
+    # The product filter is what turns the same URL into a listing. Both spellings
+    # are tried because either the param or the type varies by theme.
+    "?s={q}&post_type=product",
+    "?post_type=product&q={q}",
+    "?s={q}&product_cat=all",
 )
-_MAX_SEARCH_PROBES = 6
+
+# Search parameters a theme is likely to accept, read off the site's own search
+# form. A storefront nearly always ships one, and it is the only reliable source
+# for the parameter name: miamicenters 404s on `?q=` and `/search?q=` and works
+# on `?s=`, which nothing about the markup would have revealed.
+_FORM_SEARCH_NAMES = ("q", "s", "search", "keyword", "query", "term",
+                      "searchkey", "search_query", "find", "text",
+                      "product_search", "pq")
+_MAX_SEARCH_PROBES = 10
 
 # How many ranked card sets to try against the one page that did answer. This
 # is the "keep going until it parses" loop and it is bounded on purpose: it
@@ -1557,7 +1573,10 @@ def _sig_selector(sig):
 
 # Three or more digits in a row, with thousands separators allowed: the shape of
 # a phone price, and a poor match for a year or a review count.
-_NUMERIC = re.compile(r"\d[\d,  .]{2,}")
+_NUMERIC = re.compile(r"\d[\d,  .]{2,}")
+
+# What may sit next to the digits and still leave a price a price.
+_CURRENCY_MARKS = "ج.م.£$€¥₹EGPUSDGBPUSDجنيهريالدرهمدولار"
 
 
 def normalize_store_url(raw):
@@ -1597,7 +1616,14 @@ def _join(base, pattern):
     A pattern starting with `?` is appended as-is so the base keeps the slash
     the store may route on. A pattern starting with `/` brings its own, so any
     trailing slash on the base is dropped first and the two never double up.
+
+    A pattern that is already a whole URL - which is what the site's own search
+    form produces - is used exactly as the form spelled it. Rewriting one to
+    look like a relative pattern would edit an address that was just verified
+    to work.
     """
+    if "://" in pattern:
+        return pattern
     if pattern.startswith("?"):
         return base + pattern
     return base.rstrip("/") + pattern
@@ -1618,14 +1644,33 @@ def _sig_selector(sig):
 
 
 def _looks_pricey(el):
-    """Whether this element's text is shaped like a price."""
+    """Whether this element's text is shaped like a price.
+
+    A price is digits, separators, and a currency mark. A product name is digits
+    with words attached - "أبل آيفون 15", "iPhone 16 Pro" - and parse_price will
+    happily return 15 from the tail of it, so text carrying letters between or
+    around the digits is not a price. Currency words and the Arabic currency
+    mark are the exception: "15,500 ج.م" and "$15,500" are prices.
+    """
     cls = " ".join(el.get("class") or []).lower()
-    if any(h in cls for h in _PRICE_HINT):
-        return bool(_NUMERIC.search(el.get_text(" ", strip=True)))
     if el.get("data-price") is not None or el.get("itemprop") == "price":
         return True
     text = el.get_text(" ", strip=True)
-    return bool(_NUMERIC.search(text)) and len(text) < 40
+    if not _NUMERIC.search(text) or len(text) >= 40:
+        return False
+    # Strip the parts that legitimately accompany a number, then see whether
+    # anything word-like is left.
+    bare = text
+    for a, b in (("\xa0", " "), ("٬", ","), ("٫", ".")):
+        bare = bare.replace(a, b)
+    # Digits first: "١٥٬٥٠٠" is a price, and only then is the currency stripped.
+    bare = bare.translate(_AR_DIGITS)
+    bare = re.sub(r"[\d,\.\s]", "", bare)
+    bare = bare.strip(_CURRENCY_MARKS)
+    if not bare:
+        return True          # a bare number: 57770
+    # Left with letters or words: a name with a number in it, not a price.
+    return any(h in cls for h in _PRICE_HINT) and len(bare) <= 2
 
 
 def _card_link(card):
@@ -1713,6 +1758,15 @@ def rank_card_selectors(soup, limit=_MAX_SELECTOR_TRIES):
                 # Matches far more than it explains: a wrapper, or a bare tag
                 # catching the page as well as the listing.
                 break
+            # A block of category tiles parses into rows as cleanly as a product
+            # listing does, and the tile's "1035 products" count reads exactly
+            # like a price. When the price-shaped text names what it is counting
+            # rather than money, this is not a product listing.
+            money = sum(1 for c in cards
+                        if any(_looks_pricey(d) and _price_looks_currency(d)
+                               for d in c.find_all(True)))
+            if money < len(cards) * 0.5:
+                continue
             named = 1.0 + 0.15 * min(len(sig[1]), 3)
             if not sig[1]:
                 named = 0.6
@@ -1839,6 +1893,13 @@ def _price_groups(cards, min_ratio=0.5):
 def _pick_prices(cards):
     """(price_now, price_old) selectors for these cards.
 
+    A product name is not a price. On dream2000 the card's title link reads
+    "أبل آيفون 15", and `parse_price` takes the trailing digits as 15.0 - so a
+    title that ends in a model number becomes a price of fifteen pounds. Any
+    candidate whose text carries letters alongside the digits is dropped before
+    the values are compared, which is what keeps "iPhone 15" out of the price
+    slot while a real "15,500 ج.م" stays in it.
+
     Class names decide it when they say so, and the price values decide it when
     they do not: with two price elements on every card the lower one is what
     the customer pays. Emptiness is a legitimate answer - a store with one
@@ -1959,8 +2020,10 @@ def describe_cards(soup, item_sel):
     # _is_price_leaf for why that failure is silent.
     price_now, price_old = _pick_prices(cards)
     title = (_common_descendant(cards, heady, hints=_TITLE_HINT)
-             or _common_descendant(cards, titled_anchor))
-    link = _common_descendant(cards, anchored) or ""
+             or _common_descendant(cards, titled_anchor)
+             or _card_heading(cards))
+    link = (_common_descendant(cards, anchored)
+            or _card_link_selector(cards) or "")
     # One `img` is enough: the cards were already proven to repeat, and a
     # storefront rarely varies the image selector between cards.
     image = "img" if any(c.find("img") for c in cards) else ""
@@ -1970,6 +2033,80 @@ def describe_cards(soup, item_sel):
             "price_old": price_old,
             "link": link or item_sel,
             "image": image}
+
+
+def _card_heading(cards):
+    """The heading element shared by every card, or "" when there is none.
+
+    The last resort for a store that gives no title any other way. The longest
+    text wins among the shared candidates, because a card's name is its longest
+    string while the surrounding block usually holds the shorter labels
+    ("brand", "in stock") on separate elements.
+    """
+    counts = {}
+    for card in cards:
+        local = set()
+        for el in card.find_all(True):
+            s = _sig_selector(_sig(el))
+            if s and el.get_text(" ", strip=True):
+                local.add(s)
+        for s in local:
+            counts[s] = counts.get(s, 0) + 1
+    need = max(1, int(len(cards) * 0.7))
+    best = None
+    for s, n in counts.items():
+        if n < need:
+            continue
+        # Length of the text this selector yields, sampled from the first card.
+        length = 0
+        for card in cards:
+            el = card.select_one(s)
+            if el is None:
+                continue
+            length = len(el.get_text(" ", strip=True))
+            break
+        if length < 8:
+            continue
+        if best is None or length > best[1]:
+            best = (s, length)
+    return best[0] if best else ""
+
+
+def _card_link_selector(cards):
+    """A selector for the card's own link, or "" when the card is inside one.
+
+    _common_descendant only sees anchors *inside* the card. Dubai Phone renders
+    `<a href="/shop/..."><article class="nf-product-card">`, so the card holds no
+    anchor at all and the correct answer is the card's own selector: _parse_cards
+    already falls back to `card.name == "a" and card.has_attr("href")`, and
+    falling back to the caller keeps that path reachable.
+    """
+    for a in cards:
+        if a.name == "a" and _usable_href(a):
+            break
+    else:
+        parent = cards[0].find_parent("a", href=True) if cards else None
+        if parent is None or not _usable_href(parent):
+            return ""
+    return _sig_selector(_sig(cards[0])) or ""
+
+
+def _price_looks_currency(el):
+    """Whether this element's text reads as money rather than as a count.
+
+    A search page lists the store's categories as well as its products, and the
+    category tile on miamicenters reads "1035 products" - which parses as a
+    price of 1035.0 and outranks the real listing, because category tiles repeat
+    more often than 12 products do. The number itself cannot tell them apart, so
+    the words around it have to: a product count is stated in words, and money
+    is not.
+
+    Used to *demote* a candidate, never to accept one, so a store that prints
+    bare numerals with no currency anywhere is unaffected.
+    """
+    text = (el.get_text(" ", strip=True) or "").lower()
+    return not re.search(r"\b(products?|items?|results?|items|منتج|منتجات|"
+                         r"نتيجة|نتائج)\b", text)
 
 
 def _score_parsed(rows, host):
@@ -2119,6 +2256,80 @@ def _responds_to_keyword(base, pattern, name, host, real_count):
     return distinct < max(1, int(real_count * 0.4))
 
 
+def form_search_patterns(base, html, host):
+    """Search URLs built from the site's own search form.
+
+    A storefront nearly always ships a search box, and its `name` attribute is
+    the only dependable source for the parameter: miamicenters 404s on every
+    conventional pattern (`?q=`, `/search?q=`, `/catalogsearch/result/?q=`) and
+    answers on `?s=`, which nothing in the markup would have revealed. The form
+    is read before the generic list is tried, so the right answer costs one
+    request instead of six.
+
+    Only GET forms whose action resolves to this host are used, and the
+    placeholder is placed in the position the form itself uses: some themes put
+    the keyword in the path (`/search/iphone`) rather than the query string.
+    """
+    out = []
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+    except Exception:
+        return out
+    for form in soup.find_all("form"):
+        method = (form.get("method") or "get").lower()
+        if method != "get":
+            continue
+        action = (form.get("action") or "").strip()
+        if not action:
+            continue
+        target = urljoin(base + "/", action)
+        parsed = urlparse(target)
+        if parsed.netloc.lower() != host.lower():
+            continue
+        for inp in form.find_all(["input", "select"]):
+            if (inp.get("type") or "").lower() in ("submit", "button", "hidden"):
+                continue
+            name = (inp.get("name") or "").strip()
+            if name.lower() not in _FORM_SEARCH_NAMES:
+                continue
+            if inp.name == "input" and (inp.get("type") or "").lower() == "hidden":
+                continue
+            # Keep any other params the form needs (post_type and friends), so a
+            # form that only searches products keeps only searching products.
+            pairs = []
+            for other in form.find_all(["input", "select"]):
+                oname = (other.get("name") or "").strip()
+                if not oname or oname == name:
+                    continue
+                otype = (other.get("type") or "").lower()
+                if otype in ("submit", "button"):
+                    continue
+                pairs.append("%s=%s" % (quote_plus(oname),
+                                        quote_plus(other.get("value") or "")))
+            # The slash the form's own action carries is kept: some themes route
+            # on it, and /ar and /ar/ are different pages on this site.
+            path = parsed.path or "/"
+            if not path.endswith("/"):
+                path += "/"
+            stem = "%s://%s%s" % (parsed.scheme, parsed.netloc, path)
+            tail = "&".join([p for p in pairs if not p.endswith("=")])
+            if tail:
+                out.append("%s?%s&%s={q}" % (stem, tail, quote_plus(name)))
+            else:
+                out.append("%s?%s={q}" % (stem, quote_plus(name)))
+            # The keyword in the path, which some themes route on.
+            if parsed.path and not parsed.query:
+                out.append("%s{q}" % stem)
+            break
+    # De-duplicate, keep order.
+    seen, ordered = set(), []
+    for p in out:
+        if p not in seen:
+            seen.add(p)
+            ordered.append(p)
+    return ordered
+
+
 def guess_search_url(base, name, host, progress=None, sleep=time.sleep):
     """Find the URL on this store that lists search results for a keyword.
 
@@ -2127,12 +2338,27 @@ def guess_search_url(base, name, host, progress=None, sleep=time.sleep):
     every future search with the same page, so the front page is never a
     candidate.
 
+    The site's own search form is consulted first, because that is where the
+    parameter name is written down. The generic patterns follow for the stores
+    that ship no form (or hide it behind JavaScript).
+
     Returns (pattern, html, final_url, site, rows) for the first page that
     answers with a real listing that also responds to the keyword, or
     (None, ...) once the request budget is spent.
     """
     tried = []
-    patterns = list(_SEARCH_URL_PATTERNS[:_MAX_SEARCH_PROBES])
+    patterns = []
+    # One request for the form, when the pasted address is a page that has one.
+    try:
+        home_html, _home_final = fetch_html(base, site_key="discover")
+    except CheckpointError:
+        raise
+    except Exception:
+        home_html = ""
+    if home_html and not looks_like_checkpoint(home_html):
+        patterns.extend(form_search_patterns(base, home_html, host))
+    patterns.extend(_SEARCH_URL_PATTERNS)
+    patterns = patterns[:_MAX_SEARCH_PROBES]
     for i, pattern in enumerate(patterns):
         if progress:
             progress("جاري البحث عن صفحة النتائج… (%d/%d)"
