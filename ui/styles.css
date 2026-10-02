@@ -196,7 +196,10 @@ button { font-family: inherit; }
   height: var(--topbar-h);
   z-index: 40;
   background: var(--lowest-90);
-  backdrop-filter: blur(12px);
+  /* 8px, not 12px: this bar repaints every scroll frame (content moves
+     behind it), and the cheaper blur is visually identical over the
+     near-opaque background. */
+  backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1526,7 +1529,8 @@ input[type="text"] { font-family: inherit; }
   right: var(--rail-w);
   z-index: 35;
   background: var(--lowest-90);
-  backdrop-filter: blur(12px);
+  /* Same 8px rationale as #topbar above: fixed bars repaint per frame. */
+  backdrop-filter: blur(8px);
   border-top: 1px solid var(--outline-20);
 }
 .set-bar-inner {
