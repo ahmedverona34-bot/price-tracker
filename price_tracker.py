@@ -3148,8 +3148,19 @@ class TrackerCore:
         PERF.begin("search:%s" % query)
         try:
             disabled = set(self.disabled_sites())
-            active = [s for s in self.sites
-                      if s.get("name") not in disabled]
+            if sites is None:
+                active = [s for s in self.sites
+                          if s.get("name") not in disabled]
+            else:
+                # An explicit subset (e.g. the due sites from the
+                # auto-refresh scheduler, which already skips sites that
+                # are cooling down after a checkpoint) must be honoured:
+                # rebuilding from self.sites here re-hit a blocked store
+                # on every cycle and renewed its backoff forever.
+                wanted = set(s.get("name") for s in sites)
+                active = [s for s in self.sites
+                          if s.get("name") in wanted
+                          and s.get("name") not in disabled]
             self._reset_run(gen)
             stats = {}
             for s in self.sites:
