@@ -319,8 +319,8 @@ this repo's `dist-installer/`. Publishing a new build is a file copy:
 
 ```bat
 cd <path>\price-tracker-site
-npm run stage                                  :: newest setup -> public/downloads/latest.exe
-git add public/downloads
+npm run stage                                  :: newest setup -> public/downloads\PriceTracker-Setup-<ver>.exe
+git add public/downloads                       :: the previous versioned copy is removed by the stage
 git commit -m "Stage installer <ver>"
 git push                                       :: Vercel redeploys automatically
 ```
@@ -330,11 +330,15 @@ number, not file time** (so 1.2.11 beats 1.2.8), and warns when that version and
 `APP_VERSION` here disagree — the same mismatch that once shipped a 1.2.10
 installer wrapping a 1.2.9-era binary.
 
-The served name is fixed (`latest.exe`) on purpose: publishing a build never
-changes the URL, so no link in an old email or a cached page goes dead. The
-button's `download` attribute hands the browser the real versioned filename, so
-the file lands on disk as `PriceTracker-Setup-1.2.11.exe`, and the version and
-size printed under the button are read from the same staged file.
+The file is served **under its versioned name**, and that is deliberate. A
+stable `latest.exe` sounds tidier, but the browser takes the save name from the
+URL: a `download` attribute only renames the file after the response has already
+started, and a `Content-Disposition` from the host outranks it entirely. Both
+were tried and the dialog still offered `latest.exe`. Naming the file for its
+version makes the path itself the filename, so it is right the first time.
+
+The version and size printed under the button are read from the staged file at
+build time, so they always describe the file actually being served.
 
 **The 12 MB binary is committed to the site repo on purpose.** Deployment builds
 from a git clone, so an installer that was git-ignored would leave the deployed

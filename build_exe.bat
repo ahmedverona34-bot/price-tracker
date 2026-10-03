@@ -19,15 +19,26 @@ REM never next to the exe, so the app runs read-only from Program Files.
 REM
 REM To make the installable setup as well, run build_setup.bat.
 setlocal
-set PY=.venv\Scripts\pyinstaller.exe
-if not exist "%PY%" (
-    echo ERROR: %PY% not found. Create the venv and: pip install pyinstaller
+
+REM Look for pyinstaller rather than assuming one venv name. Both .venv and
+REM .venv312 have been used in this repo, and the old line hardcoded .venv,
+REM so the build failed on a checkout that had the other one.
+set PY=
+if exist ".venv\Scripts\pyinstaller.exe" set PY=.venv\Scripts\pyinstaller.exe
+if not defined PY if exist ".venv312\Scripts\pyinstaller.exe" set PY=.venv312\Scripts\pyinstaller.exe
+if not defined PY if exist "venv\Scripts\pyinstaller.exe" set PY=venv\Scripts\pyinstaller.exe
+if not defined PY (
+    echo ERROR: pyinstaller.exe not found.
+    echo Create a venv and install it:  pip install pyinstaller
+    echo Looked in: .venv, .venv312, venv
     exit /b 1
 )
 
+echo Using %PY%
+
 REM The spec is the single source of truth. Keeping the build in one file stops
 REM the command line and the spec from drifting apart.
-%PY% --noconfirm PriceTracker.spec
+"%PY%" --noconfirm PriceTracker.spec
 if errorlevel 1 exit /b 1
 
 REM sites.json must sit beside the exe so the user can edit it to add a store.
