@@ -131,6 +131,13 @@ HEADERS = {
     "Sec-Fetch-Mode": "navigate",
     "Sec-Fetch-Site": "none",
     "Sec-Fetch-User": "?1",
+    # Client hints, matching the Chrome 126 UA above. Their absence is a
+    # cheap bot tell for protections that score header consistency
+    # (Vercel BotID in front of Dubai Phone).
+    "Sec-CH-UA": ('"Not/A)Brand";v="8", "Chromium";v="126", '
+                  '"Google Chrome";v="126"'),
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": '"Windows"',
 }
 TIMEOUT = 20
 AUTOSAVE_FILE = "prices.xlsx"
@@ -590,10 +597,22 @@ _CHECKPOINT_MARKERS = (
 CHECKPOINT_STATUS = (401, 403, 407, 408, 429, 708)
 
 
+def checkpoint_marker(html):
+    """The first checkpoint marker found in the body, or None.
+
+    Returned (not just True/False) so the block reason lands in app.log:
+    the next "Dubai Phone is blocked" report then says which wall answered.
+    """
+    low = (html or "")[:200000].lower()
+    for m in _CHECKPOINT_MARKERS:
+        if m in low:
+            return m
+    return None
+
+
 def looks_like_checkpoint(html):
     """True when the response is a checkpoint wall instead of the shop."""
-    low = (html or "")[:200000].lower()
-    return any(m in low for m in _CHECKPOINT_MARKERS)
+    return checkpoint_marker(html) is not None
 
 
 class _Browser:
@@ -742,7 +761,8 @@ class _Browser:
                     html = await page.content()
                     if looks_like_checkpoint(html):
                         raise CheckpointError(
-                            "security checkpoint page for %s" % url)
+                            "security checkpoint page for %s (marker=%r, len=%d)"
+                            % (url, checkpoint_marker(html), len(html or "")))
                     try:
                         # Slow but healthy: keep waiting, then one reload
                         # retry (same as pressing F5).
@@ -894,13 +914,16 @@ def fetch_html(url, use_playwright=False, wait_selector=None,
         try:
             r = session.get(url, timeout=TIMEOUT)
             if r.status_code in CHECKPOINT_STATUS:
-                raise CheckpointError("HTTP %s from %s"
-                                      % (r.status_code, url))
+                raise CheckpointError("HTTP %s from %s (len=%d)"
+                                      % (r.status_code, url, len(r.text or "")))
             r.raise_for_status()
             # A 200 that is really a challenge page still has to be caught,
             # otherwise it parses into zero rows and looks like "no results".
-            if looks_like_checkpoint(r.text):
-                raise CheckpointError("bot checkpoint page for %s" % url)
+            marker = checkpoint_marker(r.text)
+            if marker is not None:
+                raise CheckpointError("bot checkpoint page for %s "
+                                      "(marker=%r, len=%d)"
+                                      % (url, marker, len(r.text or "")))
             return r.text, r.url
         except CheckpointError:
             raise
