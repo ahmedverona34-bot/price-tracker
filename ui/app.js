@@ -852,88 +852,164 @@
   });
 
   /* ------------------------------------------------------------------ *
-   * Adding a store by its URL
+   * Adding a store: multi-method race dialog
    * ------------------------------------------------------------------ */
-  /* The probe walks search-URL patterns and parses candidates on a worker
-     thread, so it can take several seconds of real network work. Polling is
-     the same shape the search already uses: kick off, then read status. The
-     tick stops on any terminal state so a finished probe costs nothing. */
-  var addPoll = null;
+  /* The race tries every extraction method at once on a worker thread and the
+     first valid result wins, so it can take a minute of real network work.
+     Polling mirrors the search shape: kick off, then read status with the
+     per-method rows. The tick stops on any terminal state. */
+  var racePoll = null;
+  var raceRunning = false;
 
-  function setAddMsg(text, kind) {
-    var el = $("addStoreMsg");
+  var RACE_STATE_AR = {
+    waiting: "في الانتظار",
+    running: "شغالة…",
+    done: "تم",
+    won: "نجحت ✓",
+    lost: "أُلغيت",
+    failed: "فشلت"
+  };
+
+  function raceSetMsg(text, kind) {
+    var el = $("storeModalMsg");
     el.textContent = text || "";
     el.className = "add-store-msg" + (kind ? " is-" + kind : "");
     el.hidden = !text;
   }
 
-  function setAddBusy(busy) {
-    $("addStoreBtn").disabled = busy;
-    $("addStoreCancelBtn").hidden = !busy;
-    $("addStoreUrl").disabled = busy;
+  function raceSetBusy(busy) {
+    raceRunning = busy;
+    $("storeAutoBtn").disabled = busy;
+    $("storeModalCancelBtn").classList.toggle("hidden", !busy);
+    $("storeUrlInput").disabled = busy;
+    $("storeKeywordInput").disabled = busy;
   }
 
-  function runAddStore() {
-    var url = ($("addStoreUrl").value || "").trim();
-    if (!url) {
-      setAddMsg("اكتب رابط المتجر أولًا.", "error");
-      return;
+  function escHtml(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function renderRaceMethods(methods) {
+    var box = $("storeMethodsList");
+    var html = "";
+    var i, m, state, detail, count, ms;
+    for (i = 0; i < methods.length; i++) {
+      m = methods[i];
+      state = m.state || "waiting";
+      detail = m.detail || (RACE_STATE_AR[state] || state);
+      count = m.count ? ' <span class="method-count">' + m.count + "</span>" : "";
+      ms = m.ms ? " (" + (m.ms / 1000).toFixed(1) + " ث)" : "";
+      html += '<div class="method-row" data-method="' + escHtml(m.id) + '">' +
+        '<span class="method-dot is-' + escHtml(state) + '"></span>' +
+        '<span class="method-name">' + escHtml(m.name) + "</span>" +
+        '<span class="method-detail">' + escHtml(detail) + ms + "</span>" + count +
+        '<button class="btn-outline sm method-retry" data-retry="' + escHtml(m.id) + '">تجربة</button>' +
+        "</div>";
     }
-    setAddBusy(true);
-    setAddMsg("جاري فحص الموقع…");
-    api("add_store", url).then(function (res) {
-      if (res && res.started === false) {
-        setAddBusy(false);
-        setAddMsg((res && res.message) || "تعذّر بدء الفحص.", "error");
-        return;
-      }
-      tickAddStore();
-    });
+    box.innerHTML = html;
   }
 
-  function tickAddStore() {
-    api("add_store_status").then(function (st) {
+  function tickRace() {
+    api("race_add_store_status").then(function (st) {
       if (!st) return;
+      renderRaceMethods(st.methods || []);
       if (st.state === "running") {
-        setAddMsg(st.message || "جاري فحص الموقع…");
-        addPoll = setTimeout(tickAddStore, 900);
+        raceSetMsg(st.message || "جاري الفحص بكل الطرق…");
+        racePoll = setTimeout(tickRace, 1000);
         return;
       }
-      clearTimeout(addPoll);
-      addPoll = null;
-      setAddBusy(false);
+      clearTimeout(racePoll);
+      racePoll = null;
+      raceSetBusy(false);
       var ok = st.state === "ok";
-      setAddMsg(st.message || "", ok ? "ok" : "error");
+      var res = st.result || {};
+      var winner = res.winner || {};
+      var msg = st.message || "";
+      if (ok && winner.name) {
+        msg += " (الطريقة: " + winner.name + ")";
+      }
+      raceSetMsg(msg, ok ? "ok" : "error");
       if (ok) {
-        $("addStoreUrl").value = "";
-        // The table and the KPI tiles both come from get_sites, and the
-        // new store is in it already, so one reload covers the whole page.
         loadSites();
       }
     });
   }
 
-  $("addStoreBtn").addEventListener("click", runAddStore);
-  $("addStoreCancelBtn").addEventListener("click", function () {
-    api("cancel_add_store").then(function () {
-      // Stop polling locally too: the worker checks the flag between steps, so
-      // a cancel can land after the current request finishes rather than at
-      // once, and the message below is replaced when the state settles.
-      if (addPoll) {
-        clearTimeout(addPoll);
-        addPoll = null;
+  function runRaceAuto() {
+    var url = ($("storeUrlInput").value || "").trim();
+    var keyword = ($("storeKeywordInput").value || "").trim();
+    if (!url) {
+      raceSetMsg("اكتب رابط المتجر أولًا.", "error");
+      return;
+    }
+    raceSetBusy(true);
+    raceSetMsg("بدأ الفحص بكل الطرق…");
+    renderRaceMethods([]);
+    api("race_add_store", url, keyword).then(function (res) {
+      if (res && res.started === false) {
+        raceSetBusy(false);
+        raceSetMsg((res && res.message) || "تعذّر بدء الفحص.", "error");
+        return;
       }
-      setAddBusy(false);
-      setAddMsg("جاري الإلغاء…");
+      tickRace();
+    });
+  }
+
+  function openStoreModal() {
+    $("storeModal").classList.remove("hidden");
+    renderRaceMethods([]);
+    raceSetMsg("");
+  }
+
+  function closeStoreModal() {
+    if (raceRunning) {
+      api("race_cancel_add_store").then(function () {});
+      if (racePoll) {
+        clearTimeout(racePoll);
+        racePoll = null;
+      }
+      raceSetBusy(false);
+    }
+    $("storeModal").classList.add("hidden");
+  }
+
+  $("openStoreModalBtn").addEventListener("click", openStoreModal);
+  $("storeModalClose").addEventListener("click", closeStoreModal);
+  $("storeModal").addEventListener("click", function (e) {
+    if (e.target === $("storeModal")) closeStoreModal();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && !$("storeModal").classList.contains("hidden")) {
+      closeStoreModal();
+    }
+  });
+  $("storeAutoBtn").addEventListener("click", runRaceAuto);
+  $("storeModalCancelBtn").addEventListener("click", function () {
+    api("race_cancel_add_store").then(function () {
+      if (racePoll) {
+        clearTimeout(racePoll);
+        racePoll = null;
+      }
+      raceSetBusy(false);
+      raceSetMsg("جاري الإلغاء…");
     });
   });
-  /* Enter submits: the field is the only control on the panel, and the audience
-     types a URL and presses Enter. */
-  $("addStoreUrl").addEventListener("keydown", function (e) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      runAddStore();
-    }
+  $("storeMethodsList").addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-retry]");
+    if (!btn || raceRunning) return;
+    var method = btn.getAttribute("data-retry");
+    raceSetBusy(true);
+    raceSetMsg("إعادة تجربة طريقة واحدة…");
+    api("race_retry_method", method).then(function (res) {
+      if (res && res.started === false) {
+        raceSetBusy(false);
+        raceSetMsg((res && res.message) || "تعذّر بدء الفحص.", "error");
+        return;
+      }
+      tickRace();
+    });
   });
 
   /* ------------------------------------------------------------------ *
