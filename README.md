@@ -94,6 +94,26 @@ Two parser fallbacks cover stores whose cards hydrate late or rename classes:
 JSON-LD (`@graph` / `ItemList` / `priceSpecification` aware) and lazy-image
 `srcset` / `data-srcset` URLs.
 
+### Collecting products with Scrapling (`scrapling_client.py`)
+
+A self-contained module built on [Scrapling](https://github.com/D4Vinci/Scrapling)
+(`scrapling[fetchers]==0.4.15` in `requirements.txt`). Pass a store URL, get
+back product rows (`title`, `price`, `currency`, `old_price`, `image_urls`,
+`availability`, `link`):
+
+```bat
+.venv\Scripts\python scrapling_client.py --url https://dream2000.com --query iphone
+.venv\Scripts\python scrapling_client.py --url "https://www.compumarts.com/search?q=iphone" --out products.json
+.venv\Scripts\python scrapling_client.py --url https://miamicenters.com --query iphone --crawl --out catalog.json
+```
+
+Method ladder, lightest first: Shopify/Woo JSON endpoints → plain `Fetcher`
+→ `DynamicFetcher` (installed Chrome, no browser download) → `StealthyFetcher`
+(Cloudflare only). Spiders run polite by default (`robots_txt_obey`, 1
+req/domain at a time, delay); proxies stay off unless `--proxies` is passed.
+After `pip install`, run `.venv\Scripts\scrapling install` once for the
+bundled browsers (skippable while `real_chrome` covers the browser fetchers).
+
 ### Adding a store from its URL
 
 The Data Sources page (مصادر البيانات) can add a store the user has never

@@ -11,6 +11,13 @@ requests==2.34.2
 beautifulsoup4==4.15.0
 openpyxl==3.1.5
 
+# Scrapling (adaptive scraping framework). The [fetchers] extra pulls the
+# HTTP (curl_cffi) + browser (playwright/patchright) engines. After installing,
+# run `scrapling install` once to download the browsers (needs network access
+# to the Playwright CDN). Browser fetchers can instead reuse an installed
+# Google Chrome via real_chrome=True, which needs no download.
+scrapling[fetchers]==0.4.15
+
 # pywebview opens the native window through Edge WebView2. On Windows it
 # loads that control via pythonnet's .NET bridge, so pythonnet and
 # clr_loader are NOT optional here: without them the window fails to open
