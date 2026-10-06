@@ -932,6 +932,9 @@
       }
       raceSetMsg(msg, ok ? "ok" : "error");
       if (ok) {
+        // Clear the table filter so the new store is never hidden behind
+        // text typed earlier in the site search box.
+        $("siteSearch").value = "";
         loadSites();
       }
     });
