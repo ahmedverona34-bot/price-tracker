@@ -114,6 +114,22 @@ req/domain at a time, delay); proxies stay off unless `--proxies` is passed.
 After `pip install`, run `.venv\Scripts\scrapling install` once for the
 bundled browsers (skippable while `real_chrome` covers the browser fetchers).
 
+Batch mode collects many listing pages concurrently while keeping the same
+politeness rules (global + per-domain caps, per-domain delay, robots.txt):
+
+```bat
+.venv\Scripts\python scrapling_client.py --batch tasks.json --out batch.json
+.venv\Scripts\python scrapling_client.py --batch tasks.json --no-parallel
+.venv\Scripts\python benchmark_parallel.py
+```
+
+`tasks.json` is a list of URLs (or `{"url", "query"?, "selectors"?,
+"fetcher"?}` objects). Parallelism lives in one place — `ParallelConfig`
+(`enabled`, `max_concurrent=4`, `max_per_domain=2`, `browser_tabs=2`) —
+and `enabled=False` (or `--no-parallel`) replays the same pipeline
+sequentially for debugging. Measured on 6 real store pages: 7.9s sequential
+vs 2.9s parallel (2.7x), identical extracted data.
+
 ### Adding a store from its URL
 
 The Data Sources page (مصادر البيانات) can add a store the user has never

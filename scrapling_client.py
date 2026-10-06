@@ -18,10 +18,16 @@ Fetcher ladder (lightest first, escalate only when needed):
 
 Politeness is on by default: robots.txt is checked before single-page
 fetches, spiders run with ``robots_txt_obey=True``, per-domain concurrency
-of 1 and a download delay. Proxy support exists but is off by default.
+caps and a download delay. Proxy support exists but is off by default.
+
+collect_batch() fetches many listing URLs with asyncio.gather under global
+and per-domain semaphores (see ParallelConfig); browser levels share one
+session with a capped tab pool. parallel.enabled=False replays the same
+pipeline sequentially for debugging.
 """
 
 import argparse
+import asyncio
 import json
 import logging
 import re
@@ -84,6 +90,23 @@ class CollectConfig:
     solve_cloudflare: bool = False
     proxies: list = field(default_factory=list)  # off by default; enables rotation
     proxy: str | None = None    # single proxy override (takes precedence)
+
+
+@dataclass
+class ParallelConfig:
+    """All parallelism knobs in one place. Conservative defaults on purpose.
+
+    - enabled=False runs the exact same pipeline sequentially (debugging).
+    - max_concurrent caps total in-flight requests across every domain.
+    - max_per_domain caps in-flight requests to a single domain.
+    - browser_tabs caps the shared browser tab pool (one browser per
+      fetcher level, tabs shared by all tasks - never a browser per link).
+    - Per-domain politeness gap reuses CollectConfig.delay.
+    """
+    enabled: bool = True
+    max_concurrent: int = 4
+    max_per_domain: int = 2
+    browser_tabs: int = 2
 
 
 def detect_platform(html, url=""):
@@ -273,31 +296,7 @@ def _json_rows_woo_store_api(origin, query, config, page_num=1):
     items = page.json()
     if not isinstance(items, list):
         return []
-    rows = []
-    for product in items:
-        prices = product.get("prices") or {}
-        try:
-            minor = int(prices.get("currency_minor_unit") or 0)
-        except (TypeError, ValueError):
-            minor = 0
-        divisor = 10 ** minor
-        try:
-            after = float(prices.get("price")) / divisor
-            regular = float(prices.get("regular_price")) / divisor
-        except (TypeError, ValueError):
-            continue
-        images = product.get("images") or []
-        rows.append({
-            "title": _unescape(str(product.get("name") or "")).strip(),
-            "price": after,
-            "currency": prices.get("currency_code") or "EGP",
-            "old_price": regular if regular > after else after,
-            "image_urls": [images[0].get("src")] if images and images[0].get("src") else [],
-            "availability": "in_stock" if product.get("is_in_stock") else "out_of_stock",
-            "link": product.get("permalink") or origin,
-            "brand": None,
-        })
-    return rows
+    return _map_woo_products(items, origin)
 
 
 def try_json_endpoint(origin, query, platform, config):
@@ -643,10 +642,353 @@ def collect_products(store_url, query=None, config=None, selectors=None,
     return []
 
 
+# ---------------------------------------------------------------------------
+# Parallel batch collection (asyncio + semaphores, shared sessions)
+# ---------------------------------------------------------------------------
+# Strategy per case:
+# - Many links/stores in one batch -> asyncio.gather + Semaphore, one shared
+#   static session (connection pooling) for all tasks.
+# - Browser levels -> ONE shared AsyncDynamic/AsyncStealthy session whose tab
+#   pool is capped by ParallelConfig.browser_tabs (never a browser per link).
+# - Single-store multi-page walks -> crawl_catalog (the Spider engine already
+#   crawls concurrently with per-domain limits; knobs mapped below).
+# No shared mutable state between tasks except idempotent caches and the
+# library-owned session/tab pools. Results keep input order explicitly.
+
+
+class _DomainGate:
+    """Per-domain in-flight cap + minimum gap between request starts."""
+
+    def __init__(self, max_in_flight, min_gap):
+        self._sem = asyncio.Semaphore(max_in_flight)
+        self._lock = asyncio.Lock()
+        self._min_gap = min_gap
+        self._last_start = 0.0
+
+    async def __aenter__(self):
+        await self._sem.acquire()
+        try:
+            async with self._lock:
+                wait = self._min_gap - (time.monotonic() - self._last_start)
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                self._last_start = time.monotonic()
+        except Exception:
+            self._sem.release()
+            raise
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self._sem.release()
+        return False
+
+
+class _BatchContext:
+    """Shared, task-safe resources for one collect_batch run."""
+
+    def __init__(self, config, parallel):
+        self.config = config
+        self.parallel = parallel
+        self.global_sem = asyncio.Semaphore(parallel.max_concurrent)
+        self.gates = {}
+        self.gates_lock = asyncio.Lock()
+        self.static = None
+        self.browsers = {}
+        self.browsers_lock = asyncio.Lock()
+        self.robots_cache = {}
+
+    async def gate(self, netloc):
+        async with self.gates_lock:
+            gate = self.gates.get(netloc)
+            if gate is None:
+                gate = _DomainGate(_max_per_domain(self.parallel),
+                                   self.config.delay)
+                self.gates[netloc] = gate
+        return gate
+
+    async def robots_ok(self, url):
+        netloc = urlparse(url).netloc
+        if netloc not in self.robots_cache:
+            loop = asyncio.get_running_loop()
+            allowed = await loop.run_in_executor(None, robots_allowed, url)
+            self.robots_cache[netloc] = allowed
+        return self.robots_cache[netloc]
+
+    async def browser(self, level):
+        """Lazily shared browser session with a capped tab pool."""
+        from scrapling.fetchers import AsyncDynamicSession, AsyncStealthySession
+        async with self.browsers_lock:
+            session = self.browsers.get(level)
+            if session is None:
+                config = self.config
+                common = dict(headless=config.headless,
+                              real_chrome=config.real_chrome,
+                              network_idle=True,
+                              timeout=config.timeout * 1000,
+                              retries=config.retries,
+                              retry_delay=config.retry_delay,
+                              max_pages=self.parallel.browser_tabs,
+                              selector_config={"adaptive": True},
+                              **_proxy_kwargs(config))
+                if level == "dynamic":
+                    session = AsyncDynamicSession(**common)
+                else:
+                    session = AsyncStealthySession(**common)
+                await session.__aenter__()
+                self.browsers[level] = session
+        return session
+
+    async def close_browsers(self):
+        for session in self.browsers.values():
+            try:
+                await session.__aexit__(None, None, None)
+            except Exception:
+                logger.debug("browser close failed", exc_info=True)
+        self.browsers.clear()
+
+
+def _max_per_domain(parallel):
+    return max(1, int(parallel.max_per_domain))
+
+
+async def _afetch_page(ctx, url, level):
+    """One fetch through the shared sessions."""
+    config = ctx.config
+    if level == "static":
+        return await ctx.static.get(
+            url, timeout=config.timeout, retries=config.retries,
+            retry_delay=config.retry_delay, stealthy_headers=True,
+            **_proxy_kwargs(config))
+    session = await ctx.browser(level)
+    kwargs = {}
+    if level == "stealth":
+        kwargs["solve_cloudflare"] = config.solve_cloudflare or True
+    return await session.fetch(url, **kwargs)
+
+
+async def _acollect_one(task, ctx, defaults):
+    """One listing task. Returns {'url', 'rows'} or raises _TaskFailed."""
+    config = ctx.config
+    url = task["url"]
+    query = task.get("query", defaults.get("query"))
+    selectors = task.get("selectors", defaults.get("selectors"))
+    fetcher = task.get("fetcher", defaults.get("fetcher", "auto"))
+    netloc = urlparse(url).netloc
+    gate = await ctx.gate(netloc)
+
+    async with ctx.global_sem, gate:
+        if not await ctx.robots_ok(url):
+            raise _TaskFailed(url, "robots.txt disallows this URL", 0)
+        # Structured JSON fast path for keyword tasks.
+        if query:
+            origin = "%s://%s" % (urlparse(url).scheme or "https", netloc)
+            probe = await ctx.static.get(origin, timeout=config.timeout,
+                                         retries=1)
+            platform = detect_platform(
+                (getattr(probe, "body", b"") or b"").decode("utf-8",
+                                                            errors="ignore"),
+                origin)
+            rows, _method = await _ajson_endpoint(origin, query, platform,
+                                                 ctx)
+            if len(rows) >= 3:
+                return {"url": url, "rows": rows}
+            if not urlparse(url).query and urlparse(url).path in ("", "/"):
+                url = _build_search_url(origin, platform, query)
+        levels = {"static": ("static",), "dynamic": ("dynamic",),
+                  "stealth": ("stealth",)}.get(
+            fetcher, ("static", "dynamic", "stealth"))
+        last_error = None
+        for level in levels:
+            try:
+                page = await _afetch_page(ctx, url, level)
+            except Exception as exc:
+                last_error = exc
+                continue
+            if looks_blocked(page):
+                last_error = RuntimeError("blocked (%s)" % getattr(
+                    page, "status", "?"))
+                if fetcher == "auto" and level != "stealth":
+                    continue
+                raise _TaskFailed(url, str(last_error), 1)
+            rows = extract_products_from_html(
+                page, getattr(page, "url", None) or url, selectors)
+            if len(rows) >= 3:
+                return {"url": url, "rows": rows}
+            if fetcher == "auto" and level == "static" \
+                    and looks_js_shell(page):
+                continue
+            if rows:
+                return {"url": url, "rows": rows}
+        raise _TaskFailed(url, repr(last_error) if last_error
+                          else "no products found", 1)
+
+
+class _TaskFailed(Exception):
+    def __init__(self, url, reason, attempts):
+        super().__init__(reason)
+        self.url = url
+        self.reason = reason
+        self.attempts = attempts
+
+
+async def _ajson_endpoint(origin, query, platform, ctx):
+    """Async structured-data fast path through the shared static session."""
+    config = ctx.config
+    if platform in ("shopify", "unknown"):
+        for prefix in ("/en", "", "/ar"):
+            url = ("%s%s/search/suggest.json?q=%s"
+                   "&resources[type]=product&resources[limit]=10"
+                   % (origin, prefix, quote_plus(query)))
+            try:
+                page = await ctx.static.get(url, timeout=config.timeout,
+                                            retries=config.retries,
+                                            retry_delay=config.retry_delay)
+            except Exception:
+                continue
+            if getattr(page, "status", 0) != 200:
+                continue
+            try:
+                data = page.json()
+            except Exception:
+                continue
+            products = ((data.get("resources") or {}).get("results")
+                        or {}).get("products") or []
+            if products:
+                rows = _map_shopify_products(products, origin)
+                if len(rows) >= 3:
+                    return rows, "shopify_suggest"
+    if platform in ("woocommerce", "unknown"):
+        url = ("%s/wp-json/wc/store/v1/products?search=%s&per_page=20&page=1"
+               % (origin, quote_plus(query)))
+        try:
+            page = await ctx.static.get(url, timeout=config.timeout,
+                                        retries=config.retries,
+                                        retry_delay=config.retry_delay)
+            items = page.json()
+        except Exception:
+            return [], None
+        if isinstance(items, list):
+            rows = _map_woo_products(items, origin)
+            if len(rows) >= 3:
+                return rows, "woo_store_api"
+    return [], None
+
+
+def _map_woo_products(items, origin):
+    rows = []
+    for product in items:
+        prices = product.get("prices") or {}
+        try:
+            minor = int(prices.get("currency_minor_unit") or 0)
+        except (TypeError, ValueError):
+            minor = 0
+        try:
+            after = float(prices.get("price")) / (10 ** minor)
+            regular = float(prices.get("regular_price")) / (10 ** minor)
+        except (TypeError, ValueError):
+            continue
+        images = product.get("images") or []
+        rows.append({
+            "title": _unescape(str(product.get("name") or "")).strip(),
+            "price": after,
+            "currency": prices.get("currency_code") or "EGP",
+            "old_price": regular if regular > after else after,
+            "image_urls": [images[0].get("src")] if images and images[0].get("src") else [],
+            "availability": "in_stock" if product.get("is_in_stock") else "out_of_stock",
+            "link": product.get("permalink") or origin,
+            "brand": None,
+        })
+    return rows
+
+
+def _normalize_tasks(tasks, query=None, selectors=None, fetcher="auto"):
+    normalized = []
+    for task in tasks:
+        if isinstance(task, str):
+            normalized.append({"url": task, "query": query,
+                               "selectors": selectors, "fetcher": fetcher})
+        else:
+            item = {"url": task["url"],
+                    "query": task.get("query", query),
+                    "selectors": task.get("selectors", selectors),
+                    "fetcher": task.get("fetcher", fetcher)}
+            normalized.append(item)
+    return normalized
+
+
+async def collect_batch(tasks, config=None, parallel=None, query=None,
+                        selectors=None, fetcher="auto"):
+    """Collect many listing URLs concurrently.
+
+    :param tasks: list of URLs or dicts
+        (``{"url", "query"?, "selectors"?, "fetcher"?}``).
+    :returns: ``{"items": [{"url", "rows"}... in input order],
+        "errors": [{"url", "error", "attempts"}...]}``. One failing task
+        never stops the batch; every failure is reported, none swallowed.
+    """
+    from scrapling.fetchers import FetcherSession
+    config = config or CollectConfig()
+    parallel = parallel or ParallelConfig()
+    items = _normalize_tasks(tasks, query, selectors, fetcher)
+    ctx = _BatchContext(config, parallel)
+    proxy_kwargs = _proxy_kwargs(config)
+
+    async def worker(task):
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                return await _acollect_one(
+                    task, ctx,
+                    {"query": task.get("query"),
+                     "selectors": task.get("selectors"),
+                     "fetcher": task.get("fetcher", "auto")})
+            except _TaskFailed as exc:
+                if attempts <= 1 and "robots" not in exc.reason:
+                    await asyncio.sleep(config.retry_delay * attempts)
+                    continue
+                return {"url": task["url"], "rows": [],
+                        "error": exc.reason, "attempts": attempts}
+            except Exception as exc:
+                if attempts <= 1:
+                    await asyncio.sleep(config.retry_delay * attempts)
+                    continue
+                logger.exception("task failed for %s", task["url"])
+                return {"url": task["url"], "rows": [],
+                        "error": repr(exc), "attempts": attempts}
+
+    async with FetcherSession(
+            impersonate="chrome", timeout=config.timeout,
+            retries=config.retries, retry_delay=config.retry_delay,
+            stealthy_headers=True, selector_config={"adaptive": True},
+            **proxy_kwargs) as static_session:
+        ctx.static = static_session
+        try:
+            if parallel.enabled:
+                results = await asyncio.gather(
+                    *(worker(task) for task in items))
+            else:
+                results = [await worker(task) for task in items]
+        finally:
+            await ctx.close_browsers()
+    ordered_items, errors = [], []
+    for res in results:
+        if res.get("error"):
+            errors.append({"url": res["url"], "error": res["error"],
+                           "attempts": res.get("attempts", 1)})
+        ordered_items.append({"url": res["url"], "rows": res.get("rows", [])})
+    return {"items": ordered_items, "errors": errors}
+
+
+def collect_batch_sync(tasks, **kwargs):
+    """Synchronous wrapper around collect_batch (CLI / notebooks)."""
+    return asyncio.run(collect_batch(tasks, **kwargs))
+
+
 def crawl_catalog(start_urls, parse_callback=None, out_path="products.json",
                   next_page_css="a.next::attr(href), li.next a::attr(href)",
                   card_css=None, config=None, crawldir="crawl_data/catalog",
-                  export_format="json"):
+                  export_format="json", parallel=None):
     """Multi-page catalog crawl with pagination, pause/resume and export.
 
     :param start_urls: catalog/search pages to start from.
@@ -654,19 +996,24 @@ def crawl_catalog(start_urls, parse_callback=None, out_path="products.json",
         defaults to the adaptive card extractor.
     :param out_path: export destination (parent dirs auto-created).
     :param export_format: 'json' | 'jsonl' | 'csv' | 'xml'.
+    :param parallel: ParallelConfig mapped onto the spider's own concurrency
+        knobs (concurrent_requests / per-domain / download_delay floor).
     """
     from scrapling.spiders import Request, Response, Spider
     config = config or CollectConfig()
+    parallel = parallel or ParallelConfig()
     if isinstance(start_urls, str):
         start_urls = [start_urls]
     domains = {urlparse(url).netloc for url in start_urls}
     card_selector = card_css
     delay = config.delay
+    spider_concurrency = max(1, parallel.max_concurrent) if parallel.enabled else 1
+    spider_per_domain = _max_per_domain(parallel) if parallel.enabled else 1
 
     class CatalogSpider(Spider):
         name = "catalog"
-        concurrent_requests = 2
-        concurrent_requests_per_domain = 1
+        concurrent_requests = spider_concurrency
+        concurrent_requests_per_domain = spider_per_domain
         download_delay = delay
         robots_txt_obey = True
         allowed_domains = domains
@@ -731,12 +1078,39 @@ def main(argv=None):
                         help="Full catalog crawl instead of one page")
     parser.add_argument("--proxies", action="append", default=[],
                         help="Proxy URL (repeatable; off by default)")
+    parser.add_argument("--batch", default=None,
+                        help="JSON file with a list of task URLs/objects; "
+                             "collected with collect_batch")
+    parser.add_argument("--no-parallel", action="store_true",
+                        help="Sequential mode (same pipeline, one task at a time)")
+    parser.add_argument("--max-concurrent", type=int, default=4)
+    parser.add_argument("--max-per-domain", type=int, default=2)
+    parser.add_argument("--browser-tabs", type=int, default=2)
     args = parser.parse_args(argv)
 
     config = CollectConfig(proxies=args.proxies)
+    parallel = ParallelConfig(enabled=not args.no_parallel,
+                              max_concurrent=args.max_concurrent,
+                              max_per_domain=args.max_per_domain,
+                              browser_tabs=args.browser_tabs)
+    if args.batch:
+        with open(args.batch, encoding="utf-8") as handle:
+            tasks = json.load(handle)
+        result = collect_batch_sync(tasks, config=config, parallel=parallel,
+                                    query=args.query, fetcher=args.fetcher)
+        total = sum(len(item["rows"]) for item in result["items"])
+        print("batch: %d urls, %d products, %d errors"
+              % (len(result["items"]), total, len(result["errors"])))
+        for err in result["errors"]:
+            print(" ERROR %s: %s" % (err["url"], err["error"]))
+        if args.out:
+            with open(args.out, "w", encoding="utf-8") as handle:
+                json.dump(result, handle, ensure_ascii=False, indent=2)
+            print("wrote %s" % args.out)
+        return
     if args.crawl:
         result = crawl_catalog(args.url, out_path=args.out or "products.json",
-                               config=config)
+                               config=config, parallel=parallel)
         print("crawled %d items -> %s" % (len(result.items),
                                           args.out or "products.json"))
         return
