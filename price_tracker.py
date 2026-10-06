@@ -1823,10 +1823,20 @@ def load_sites():
         for s in sites:
             if not isinstance(s, dict):
                 return [], "ملف sites.json غير صالح. يُرجى مراجعة الملف والمحاولة مرة أخرى."
-            for k in ("name", "search_url", "item", "title", "price_now", "link"):
-                if not s.get(k):
-                    return [], ("موقع ينقصه بيانات (%s). يُرجى مراجعة ملف sites.json."
-                                 % s.get("name", "?"))
+            if not s.get("name") or not s.get("search_url"):
+                return [], ("موقع ينقصه بيانات (%s). يُرجى مراجعة ملف sites.json."
+                             % s.get("name", "?"))
+            # Classic selector entries need their card fields; race-saved
+            # method entries (api/structured/embedded/sitemap, or a WebView2
+            # entry) carry the winning method instead of selectors.
+            has_classic = all(s.get(k) for k in ("item", "title",
+                                                "price_now", "link"))
+            has_method = (s.get("method") in ("api", "structured",
+                                              "embedded", "sitemap")
+                          or s.get("use_webview"))
+            if not (has_classic or has_method):
+                return [], ("موقع ينقصه بيانات (%s). يُرجى مراجعة ملف sites.json."
+                             % s.get("name", "?"))
             # How many product pages may be opened at once for coupons.
             # Over plain HTTP this is a worker count, not browser tabs, so it
             # may go higher; the hard cap keeps a burst polite either way.
