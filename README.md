@@ -1,7 +1,8 @@
 Price Tracker
 
 A Windows desktop app that searches one keyword across Egyptian phone stores
-(2B Egypt, Dubai Phone) and shows real prices with before/after values,
+(2B Egypt, Dubai Phone, Dream 2000, Kimo Store, Compumarts, Miami Centers)
+and shows real prices with before/after values,
 discount percentages, and coupon math — then keeps an Excel record and flags
 price drops over time.
 
@@ -73,7 +74,25 @@ optionally `price_old` and `image`.
 
 Optional keys: `paginate` (`{"param": "page", "max_pages": 5}`),
 `page_delay`, `refresh_sec`, `coupon_badge`, `detail_pages`, `detail_cap`,
-`use_playwright`.
+`use_playwright`, `platform` (free-form hint: `shopify`, `woocommerce`,
+`magento` — documents which quirk set the entry was verified against).
+
+### Per-platform cheat sheet
+
+Every new store so far turned out to be one of two platforms, each with its
+own search/pagination shape. Match the platform first, then verify the
+selectors live — class names drift between themes.
+
+| Platform | Stores here | Search URL | Pages | Price quirk |
+|---|---|---|---|---|
+| Shopify | Dream 2000, Kimo, Compumarts | `/search?q={q}` | `?page=N` (`{"param": "page"}`) | Sale cards split current/compare into separate spans; single-price cards have no compare node (`before = after`) |
+| WooCommerce (Woodmart) | Miami Centers | `/?s={q}&post_type=product` (the `post_type` filter keeps blog posts out) | `/page/N/` (`{"path": "/page/{n}/"}`) | Discounted price is `<del>old</del> <ins>new</ins>` inside one `.price` — the parser prefers `<ins>` when both numbers are present |
+| Magento 2 | 2B Egypt | `/catalogsearch/result/?q={q}` (locale prefix matters: `/en/…`) | `?p=N` | Compare-at and current share `span.price`, split only by `.old-price` / `.special-price` wrappers |
+| Next.js (custom) | Dubai Phone | site-specific (`/search-results?q=`) | `?page=N` | Coupon badges (`coupon_badge: true`): displayed price is pre-coupon |
+
+Two parser fallbacks cover stores whose cards hydrate late or rename classes:
+JSON-LD (`@graph` / `ItemList` / `priceSpecification` aware) and lazy-image
+`srcset` / `data-srcset` URLs.
 
 ### Adding a store from its URL
 

@@ -1156,8 +1156,40 @@ def _walk_jsonld(node, out):
             _walk_jsonld(v, out)
 
 
+def _offer_price(offers):
+    """Best price number out of a schema.org offers block.
+
+    Stores nest this differently: a single Offer dict, a list of Offers,
+    an AggregateOffer with lowPrice, or an Offer wrapping a
+    PriceSpecification. All of them mean the same thing here.
+    """
+    if isinstance(offers, dict):
+        offers = [offers]
+    if not isinstance(offers, list):
+        return None
+    for o in offers:
+        if not isinstance(o, dict):
+            continue
+        for key in ("price", "lowPrice"):
+            if o.get(key) is not None:
+                return o.get(key)
+        spec = o.get("priceSpecification")
+        if isinstance(spec, dict) and spec.get("price") is not None:
+            return spec.get("price")
+        if isinstance(spec, list) and spec:
+            first = spec[0] if isinstance(spec[0], dict) else {}
+            if first.get("price") is not None:
+                return first.get("price")
+    return None
+
+
 def extract_jsonld_products(soup, base_url):
-    """Fallback: pull (title, price, url) from application/ld+json blocks."""
+    """Fallback: pull (title, price, url) from application/ld+json blocks.
+
+    Besides plain Product/Offer dicts this also reads the wrappers stores
+    actually ship: @graph lists, ItemList/itemListElement search results,
+    and offers carrying a priceSpecification instead of a bare price.
+    """
     found = []
     for tag in soup.find_all("script", type="application/ld+json"):
         raw = tag.string or tag.get_text() or ""
@@ -1174,12 +1206,8 @@ def extract_jsonld_products(soup, base_url):
             title = n.get("name")
             url = n.get("url")
             price = n.get("price")
-            offers = n.get("offers")
-            if price is None and isinstance(offers, dict):
-                price = offers.get("price", offers.get("lowPrice"))
-            elif price is None and isinstance(offers, list) and offers:
-                o = offers[0] if isinstance(offers[0], dict) else {}
-                price = o.get("price", o.get("lowPrice"))
+            if price is None:
+                price = _offer_price(n.get("offers"))
             try:
                 price_f = float(str(price).replace(",", "")) if price is not None else None
             except (ValueError, TypeError):
@@ -1340,8 +1368,14 @@ def detect_page_param(soup, final_url):
     paginated_urls can already build - but only when the config says so, and
     nothing says so for a store the user pasted a link for. Read off the pager
     so the query style is detected rather than assumed to be the path style.
+
+    Only recognised pagination names win: a pager link can carry other numbers
+    (a variant id, a filter), and picking one of those walks the same page
+    forever while looking like progress.
     """
+    known = ("page", "paged", "product-page", "p")
     best = None
+    best_known = None
     for a in soup.select("a[href]"):
         label = a.get_text(strip=True)
         if not label.isdigit():
@@ -1360,6 +1394,11 @@ def detect_page_param(soup, final_url):
             if value.isdigit() and 2 <= int(value) <= 500:
                 if best is None or int(value) > best[1]:
                     best = (key, int(value))
+                if key in known and (best_known is None
+                                     or int(value) > best_known[1]):
+                    best_known = (key, int(value))
+    if best_known:
+        return best_known[0]
     return best[0] if best else None
 
 
@@ -1534,6 +1573,17 @@ def _parse_cards(site, html, final_url):
                 fb = card.select_one('.price-box .price')
             price_after = parse_price(fb.get_text(" ", strip=True)) if fb else None
         price_before = parse_price(old_el.get_text(" ", strip=True)) if old_el else None
+        if (price_before is not None and price_after is not None
+                and price_after == price_before):
+            # WooCommerce writes a discounted price as <del>old</del>
+            # <ins>new</ins> inside the same .price block, so a price_now
+            # selector naming the block reads "old new" and parse_price takes
+            # the first number - always the higher one. The <ins> holds what
+            # the customer actually pays.
+            ins = card.select_one("ins .amount, ins")
+            ins_price = parse_price(ins.get_text(" ", strip=True)) if ins else None
+            if ins_price is not None:
+                price_after = ins_price
         if price_after is None:
             continue  # skip cards with no usable current price
         if price_before is None:
@@ -1567,7 +1617,14 @@ def _parse_cards(site, html, final_url):
         link = urljoin(final_url, href) if href else final_url
         img = ""
         if img_el is not None:
-            img = img_el.get("src") or img_el.get("data-src") or ""
+            img = (img_el.get("src") or img_el.get("data-src")
+                   or img_el.get("data-lazy-src") or "")
+            if not img or img.startswith("data:"):
+                # Lazy-loaded Shopify/Woo themes keep the real URL in srcset
+                # (or a data- variant) while src holds a placeholder.
+                srcset = (img_el.get("srcset") or img_el.get("data-srcset") or "")
+                if srcset:
+                    img = srcset.split(",")[0].strip().split(" ")[0]
             if img:
                 img = urljoin(final_url, img)
         rows.append({
@@ -1690,6 +1747,8 @@ _PROBE_QUERY = "iphone"
 _SEARCH_URL_PATTERNS = (
     "?q={q}",
     "/search?q={q}",
+    # Shopify's product-scoped search: same listing without articles/pages.
+    "/search?type=product&q={q}",
     "?search={q}",
     "?s={q}",
     "/search/{q}",
