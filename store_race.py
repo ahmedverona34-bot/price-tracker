@@ -563,6 +563,27 @@ def _shopify_products_rows(session, origin, keyword, token):
     return rows, ""
 
 
+def _map_woo_products(items, origin):
+    """WooCommerce Store API items -> race rows."""
+    rows = []
+    for p in items:
+        prices = p.get("prices") or {}
+        try:
+            minor = int(prices.get("currency_minor_unit") or 0)
+            after = float(prices.get("price")) / (10 ** minor)
+            regular = float(prices.get("regular_price")) / (10 ** minor)
+        except (TypeError, ValueError):
+            continue
+        images = p.get("images") or []
+        title = re.sub(r"&#?\w+;", "", str(p.get("name") or "")).strip()
+        rows.append({"title": title, "before": regular
+                     if regular > after else after, "after": after,
+                     "link": p.get("permalink") or origin,
+                     "image": (images[0].get("src") if images else "")
+                     or ""})
+    return rows
+
+
 def _woo_store_rows(session, origin, keyword, token):
     rows = []
     for page_num in (1, 2):
@@ -580,21 +601,7 @@ def _woo_store_rows(session, origin, keyword, token):
             break
         if not isinstance(items, list) or not items:
             break
-        for p in items:
-            prices = p.get("prices") or {}
-            try:
-                minor = int(prices.get("currency_minor_unit") or 0)
-                after = float(prices.get("price")) / (10 ** minor)
-                regular = float(prices.get("regular_price")) / (10 ** minor)
-            except (TypeError, ValueError):
-                continue
-            images = p.get("images") or []
-            title = re.sub(r"&#?\w+;", "", str(p.get("name") or "")).strip()
-            rows.append({"title": title, "before": regular
-                         if regular > after else after, "after": after,
-                         "link": p.get("permalink") or origin,
-                         "image": (images[0].get("src") if images else "")
-                         or ""})
+        rows.extend(_map_woo_products(items, origin))
     return rows
 
 
