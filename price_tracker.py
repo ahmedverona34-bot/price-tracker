@@ -1900,7 +1900,7 @@ _PLATFORM_MARKERS = (
     ("shopify", ("cdn/shop", "myshopify.com", "Shopify.shop", "__st=")),
     ("woocommerce", ("woocommerce", "/wp-json/", "wp-content")),
     ("magento", ("catalogsearch", "Magento", "static/frontend",
-                 "data-price-type")),
+                 "data-price-type", "hypernode")),
     ("nextjs", ("__NEXT_DATA__", "_next/static")),
     ("nuxt", ("__NUXT__", "_nuxt/")),
     ("opencart", ("index.php?route=", "route=product", "opencart")),
@@ -1938,6 +1938,7 @@ PLATFORM_FIRST_PATTERNS = {
                  "?route=product/search&search={q}"),
     "prestashop": ("/search?controller=search&s={q}",),
     "bigcommerce": ("/search.php?search_query={q}",),
+    "nuxt": ("/search/{q}?search={q}", "/search?q={q}"),
 }
 
 # Search parameters a theme is likely to accept, read off the site's own search

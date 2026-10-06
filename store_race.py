@@ -165,6 +165,8 @@ EXTRA_SEARCH_PATTERNS = (
     "/search.php?search_query={q}",
     # Salla / Zid style storefronts.
     "/search?q={q}&search_for={q}",
+    # Nuxt stores with the keyword in the path AND the query (Raya Shop).
+    "/search/{q}?search={q}",
 )
 
 
@@ -203,8 +205,19 @@ def discover_search_urls(ctx, token, report=None):
     note("قراءة الصفحة الرئيسية…")
     try:
         home_html, _ = fetch_text(ctx.session, ctx.base, token)
-    except Exception as e:
-        return [], "تعذّر فتح المتجر: %s" % e
+    except Exception:
+        # The pasted path itself can be junk (locale typo, product URL):
+        # fall back to the bare origin before giving up.
+        parsed = urlparse(ctx.base)
+        origin = "%s://%s" % (parsed.scheme, parsed.netloc)
+        if parsed.path not in ("", "/") and origin != ctx.base:
+            try:
+                home_html, _ = fetch_text(ctx.session, origin, token)
+                ctx.base = origin
+            except Exception as e:
+                return [], "تعذّر فتح المتجر: %s" % e
+        else:
+            return [], "تعذّر فتح المتجر"
     ctx.home_html = home_html
     ctx.platform = pt.detect_platform(home_html, ctx.base)
     soup = BeautifulSoup(home_html, "html.parser")
@@ -260,30 +273,44 @@ def discover_search_urls(ctx, token, report=None):
         if len([u for u in found]) >= 14:
             break
 
-    # 4. A pasted results URL is evidence already - try it first.
-    pasted = coerce_search_template(ctx.raw_url, ctx.keyword)
-    ordered = ([pasted] if pasted else []) + [u for u in found
-                                              if u != pasted]
+    # 3b. A pasted path can itself be junk (locale typo, product URL): when
+    # the base above yields nothing usable, retry from the bare origin.
+    bases = [ctx.base]
+    parsed_base = urlparse(ctx.base)
+    if parsed_base.path not in ("", "/"):
+        bases.append("%s://%s" % (parsed_base.scheme, parsed_base.netloc))
     usable = []
     probe_word = keyword_variants(ctx.keyword)[0]
-    for i, template in enumerate(ordered[:12]):
+    for base in bases:
         token.check()
-        note("تجربة عنوان البحث (%d/%d)…" % (i + 1, min(12, len(ordered))))
-        url = template.replace("{q}", quote_plus(probe_word))
-        try:
-            html, final = fetch_text(ctx.session, url, token, timeout=18)
-        except Exception:
+        per_base = [u for u in found if u.startswith(base)]
+        per_base += [pt._join(base, p) for p in patterns
+                     if pt._join(base, p) not in per_base]
+        pasted = coerce_search_template(ctx.raw_url, ctx.keyword)
+        ordered = ([pasted] if pasted and pasted.startswith(base) else [])
+        ordered += [u for u in per_base if u != pasted]
+        for i, template in enumerate(ordered[:12]):
+            token.check()
+            note("تجربة عنوان البحث (%d/%d)…"
+                 % (i + 1, min(12, len(ordered))))
+            url = template.replace("{q}", quote_plus(probe_word))
+            try:
+                html, final = fetch_text(ctx.session, url, token, timeout=18)
+            except Exception:
+                token.sleep(0.5)
+                continue
             token.sleep(0.5)
-            continue
-        token.sleep(0.5)
-        low = html.lower()
-        signals = sum((
-            "product" in low,
-            "price" in low or "egp" in low or "جنيه" in low or "ر.س" in low,
-            "/product" in low or "/products/" in low,
-        ))
-        if len(html) > 20000 and signals >= 2:
-            usable.append(template.replace("{q}", "{q}"))
+            low = html.lower()
+            signals = sum((
+                "product" in low,
+                "price" in low or "egp" in low or "جنيه" in low
+                or "ر.س" in low,
+                "/product" in low or "/products/" in low,
+            ))
+            if len(html) > 20000 and signals >= 2:
+                usable.append(template)
+            if len(usable) >= 2:
+                break
         if len(usable) >= 2:
             break
     if not usable:
@@ -605,38 +632,61 @@ def _woo_store_rows(session, origin, keyword, token):
     return rows
 
 
-def _magento_graphql_rows(session, origin, keyword, token):
-    token.check()
+def _graphql_endpoints(home_html, origin):
+    """GraphQL candidates: store origin plus API hosts named in the page."""
+    endpoints = [origin + "/graphql"]
+    hosts = re.findall(r"https?://([A-Za-z0-9.\-]+)(?:/|\")",
+                       home_html or "")
+    seen = set()
+    for host in hosts:
+        if "api" in host and host not in seen:
+            seen.add(host)
+            candidate = "https://" + host + "/graphql"
+            if candidate not in endpoints:
+                endpoints.append(candidate)
+        if len(endpoints) >= 4:
+            break
+    return endpoints
+
+
+def _magento_graphql_rows(session, origin, keyword, token, home_html=""):
+    rows = []
     query = {"query": "query($s: String!) { products(search: $s, pageSize: 12)"
                       " { items { name sku url_key url_suffix price_range {"
                       " minimum_price { final_price { value currency } } } } } }",
              "variables": {"s": keyword}}
-    try:
+    for endpoint in _graphql_endpoints(home_html, origin):
         token.check()
-        resp = session.post(origin + "/graphql", json=query, timeout=25)
-    except requests.RequestException:
-        return []
-    if resp.status_code != 200:
-        return []
-    try:
-        items = resp.json()["data"]["products"]["items"]
-    except (ValueError, KeyError, TypeError):
-        return []
-    rows = []
-    for item in items or []:
         try:
-            final = item["price_range"]["minimum_price"]["final_price"]
-            after = float(final["value"])
-        except (KeyError, TypeError, ValueError):
+            resp = session.post(endpoint, json=query, timeout=25)
+        except requests.RequestException:
+            token.sleep(0.4)
             continue
-        slug = item.get("url_key") or ""
-        suffix = item.get("url_suffix") or ".html"
-        rows.append({"title": str(item.get("name") or "").strip(),
-                     "before": after, "after": after,
-                     "link": urljoin(origin + "/", slug + suffix
-                                     if slug else ""),
-                     "image": ""})
-    return rows
+        token.sleep(0.4)
+        if resp.status_code != 200:
+            continue
+        try:
+            items = resp.json()["data"]["products"]["items"]
+        except (ValueError, KeyError, TypeError):
+            continue
+        if not items:
+            continue
+        for item in items or []:
+            try:
+                final = item["price_range"]["minimum_price"]["final_price"]
+                after = float(final["value"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            slug = item.get("url_key") or ""
+            suffix = item.get("url_suffix") or ".html"
+            rows.append({"title": str(item.get("name") or "").strip(),
+                         "before": after, "after": after,
+                         "link": urljoin(origin + "/", slug + suffix
+                                         if slug else ""),
+                         "image": "", "_endpoint": endpoint})
+        if rows:
+            return rows, endpoint
+    return [], ""
 
 
 def run_platform_api(ctx, token, report):
@@ -685,9 +735,14 @@ def run_platform_api(ctx, token, report):
                        "?search={q}&per_page=20&page={page}"}
             return {"ok": True, "entry": entry, "rows": rows,
                     "count": len(rows)}
-    if platform in ("magento", "unknown"):
+    # Magento-style GraphQL also hides behind Nuxt/Next frontends (Raya Shop
+    # is Magento on Hypernode under a Nuxt storefront), so attempt it for
+    # anything that is not positively Shopify/WooCommerce.
+    if platform in ("magento", "nuxt", "nextjs", "unknown"):
         token.check()
-        rows = _magento_graphql_rows(ctx.session, ctx.origin, keyword, token)
+        rows, endpoint = _magento_graphql_rows(ctx.session, ctx.origin,
+                                               keyword, token,
+                                               ctx.home_html)
         tried.append("graphql")
         ok, _r = valid_rows(rows, keyword)
         if ok:
@@ -695,7 +750,7 @@ def run_platform_api(ctx, token, report):
                      "search_url": ctx.origin
                      + "/catalogsearch/result/?q={q}",
                      "method": "api", "api": "magento_graphql",
-                     "api_url": ctx.origin + "/graphql"}
+                     "api_url": endpoint or (ctx.origin + "/graphql")}
             return {"ok": True, "entry": entry, "rows": rows,
                     "count": len(rows)}
     return {"ok": False, "reason": "لا API معروف لمنصة %s" % platform
@@ -1453,7 +1508,9 @@ def _fetch_api_rows(site, query, token, session):
     if kind == "woo_store_api":
         return _woo_store_rows(session, origin, query, token)
     if kind == "magento_graphql":
-        return _magento_graphql_rows(session, origin, query, token)
+        rows, _endpoint = _magento_graphql_rows(session, origin, query,
+                                                token)
+        return rows
     if kind == "captured":
         template = site.get("api_url") or ""
         url = template.replace("{q}", quote_plus(query))
