@@ -151,6 +151,7 @@ SEARCH_TIMEOUT_SEC = 8 * 60  # watchdog: free a stuck search
 # installer is actually done.
 UPDATE_EXIT_WAIT_SEC = 45
 SITES_FILE = "sites.json"
+DEFAULT_SITES_FILE = "sites.default.json"
 SETTINGS_FILE = "settings.json"
 PREVRUN_FILE = "prevrun.json"
 SLOW_AFTER_SEC = 45  # a site slower than this gets an amber status dot
@@ -1851,6 +1852,106 @@ def load_sites():
         return [], "ملف sites.json غير صالح (ليست بيانات JSON سليمة). يُرجى مراجعة الملف والمحاولة مرة أخرى."
 
 
+def _site_key(entry):
+    """Identity of a store entry: its host, else its name."""
+    if not isinstance(entry, dict):
+        return ""
+    host = urlparse(entry.get("search_url") or "").netloc.lower()
+    if host:
+        return "host:" + host
+    api_host = urlparse(entry.get("api_url") or "").netloc.lower()
+    if api_host:
+        return "host:" + api_host
+    return "name:" + str(entry.get("name") or "")
+
+
+def _read_sites_list(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            loaded = json.load(f)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    data = loaded if isinstance(loaded, dict) else {"sites": loaded}
+    sites = data.get("sites")
+    return sites if isinstance(sites, list) else None
+
+
+def merge_default_stores(settings, program_dir=None, _save=None):
+    """Protect user stores across updates without resurrecting deletions.
+
+    The installer overwrites sites.json next to the exe on every update, so
+    without this a user's added stores vanish and a user's deletions come
+    back. The build ships a pristine sites.default.json beside it; on launch
+    this merges only genuinely new defaults in (matched by host), remembers
+    which defaults shipped last time, and treats anything the user removed
+    since then as deleted for good. Never removes anything itself.
+    """
+    program_dir = program_dir or app_dir()
+    defaults_path = os.path.join(program_dir, DEFAULT_SITES_FILE)
+    user_path = os.path.join(program_dir, SITES_FILE)
+    defaults = _read_sites_list(defaults_path)
+    if defaults is None:
+        return 0  # dev checkout or old build: nothing to merge against
+    save = _save or save_settings
+    removed = set(settings.get("removed_hosts") or [])
+    shipped = settings.get("shipped_hosts")
+    default_keys = {_site_key(d) for d in defaults if _site_key(d)}
+    user = _read_sites_list(user_path)
+    if user is None:
+        # No usable user file: start from the shipped defaults wholesale.
+        try:
+            payload = json.dumps({"sites": defaults}, ensure_ascii=False,
+                                 indent=2) + "\n"
+            tmp = user_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+                f.write(payload)
+            os.replace(tmp, user_path)
+        except OSError:
+            logging.exception("could not seed sites.json from defaults")
+            return 0
+        settings["shipped_hosts"] = sorted(default_keys)
+        settings["removed_hosts"] = sorted(removed)
+        save(settings)
+        return len(defaults)
+    user_keys = {_site_key(s) for s in user if _site_key(s)}
+    dirty = False
+    if shipped is None:
+        # First run with the merger (upgrade): anything shipped before that
+        # the user no longer has was deleted on purpose.
+        removed |= (set(default_keys) - user_keys)
+        shipped = list(default_keys)
+        settings["shipped_hosts"] = sorted(shipped)
+        settings["removed_hosts"] = sorted(removed)
+        dirty = True
+    else:
+        gone = set(shipped) - user_keys
+        if gone - removed:
+            removed |= gone
+            settings["removed_hosts"] = sorted(removed)
+            dirty = True
+    added = [d for d in defaults
+             if _site_key(d) not in user_keys and _site_key(d) not in removed]
+    if added:
+        merged = user + added
+        try:
+            payload = json.dumps({"sites": merged}, ensure_ascii=False,
+                                 indent=2) + "\n"
+            tmp = user_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+                f.write(payload)
+            os.replace(tmp, user_path)
+        except OSError:
+            logging.exception("could not merge new defaults into sites.json")
+            return 0
+    current_keys = {_site_key(d) for d in defaults if _site_key(d)}
+    if set(settings.get("shipped_hosts") or []) != current_keys:
+        settings["shipped_hosts"] = sorted(current_keys)
+        dirty = True
+    if dirty:
+        save(settings)
+    return len(added)
+
+
 # ---------------------------------------------------------------------------
 # Adding a store from its URL
 # ---------------------------------------------------------------------------
@@ -3182,8 +3283,9 @@ class TrackerCore:
     """All app logic with no GUI toolkit dependency (testable headless)."""
 
     def __init__(self):
-        self.sites, self.sites_error = load_sites()
         self.settings = load_settings()
+        merge_default_stores(self.settings)
+        self.sites, self.sites_error = load_sites()
         self.all_rows = []       # raw rows from the last search
         self.results = []        # filtered rows (shown + saved)
         _prev = load_prevrun()
