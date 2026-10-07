@@ -3036,6 +3036,37 @@ def replace_site_entry(name, new_entry):
     return new_entry, None
 
 
+def remove_site_entry(name):
+    """Delete one site entry by name, atomically. Returns error_msg or None."""
+    path = sites_path()
+    try:
+        with open(path, encoding="utf-8") as f:
+            loaded = json.load(f)
+        data = loaded if isinstance(loaded, dict) else {"sites": loaded}
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        logging.exception("could not read sites.json before remove")
+        return "ملف sites.json غير صالح، لم يتم الحذف."
+    sites = data.get("sites")
+    if not isinstance(sites, list):
+        return "ملف sites.json غير صالح، لم يتم الحذف."
+    kept = [s for s in sites
+            if not (isinstance(s, dict) and s.get("name") == name)]
+    if len(kept) == len(sites):
+        return "المتجر %s غير موجود." % name
+    payload = json.dumps({"sites": kept}, ensure_ascii=False, indent=2) + "\n"
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(payload)
+        os.replace(tmp, path)
+    except OSError as e:
+        logging.exception("could not write sites.json")
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        return "تعذّر حذف المتجر (%s)." % e
+    return None
+
+
 def settings_path():
     return os.path.join(data_dir(), SETTINGS_FILE)
 
@@ -3902,6 +3933,27 @@ class TrackerCore:
         self.save_settings()
         return True
 
+    def remove_site(self, name):
+        """Delete a store by name (file + memory + related state)."""
+        name = name or ""
+        err = remove_site_entry(name)
+        if err:
+            return {"ok": False, "message": err}
+        sites, sites_error = load_sites()
+        if sites_error:
+            logging.error("sites.json unreadable after remove: %s",
+                          sites_error)
+            return {"ok": False, "message": sites_error}
+        self.sites = sites
+        dis = set(self.disabled_sites())
+        if name in dis:
+            dis.discard(name)
+            self.settings["disabled_sites"] = sorted(dis)
+            self.save_settings()
+        self.site_stats.pop(name, None)
+        _DETAIL_BATCH.pop(name, None)
+        return {"ok": True, "message": "تم حذف %s." % name}
+
     # ----- adding a store by its URL -----
     def add_store(self, url):
         """Start working out how to read a pasted store URL.
@@ -4491,6 +4543,9 @@ class Api:
 
     def set_site_enabled(self, name, on):
         return {"ok": self._core.set_site_enabled(name or "", bool(on))}
+
+    def remove_site(self, name):
+        return self._core.remove_site(name or "")
 
     def add_store(self, url):
         return self._core.add_store(url or "")

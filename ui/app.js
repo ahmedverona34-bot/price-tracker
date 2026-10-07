@@ -807,7 +807,8 @@
       + '<th class="w36">الحالة</th>'
       + '<th class="w28 center">عدد الصفوف المستخرجة</th>'
       + '<th class="w28">آخر زمن استخراج</th>'
-      + '<th class="w24 center">مفعّل</th>');
+      + '<th class="w24 center">مفعّل</th>'
+      + '<th class="w12 center">حذف</th>');
   }
   renderSitesHead();
 
@@ -834,7 +835,12 @@
           + '<td class="num">' + (s.duration_sec || 0) + " ث</td>"
           + '<td class="center"><input type="checkbox" class="custom-checkbox site-toggle"'
           + ' data-site="' + esc(s.name) + '"' + (s.enabled ? " checked" : "")
-          + ' aria-label="تفعيل ' + esc(s.name) + '"></td></tr>';
+          + ' aria-label="تفعيل ' + esc(s.name) + '"></td>'
+          + '<td class="center"><button class="icon-btn del-btn"'
+          + ' data-del="' + esc(s.name) + '" title="حذف ' + esc(s.name) + '"'
+          + ' aria-label="حذف ' + esc(s.name) + '">'
+          + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>'
+          + "</button></td></tr>";
       }).join(""));
       apply();
     });
@@ -849,6 +855,22 @@
     if (!cb) return;
     api("set_site_enabled", cb.dataset.site, cb.checked)
       .then(function () { loadSites(); poll(true); });
+  });
+
+  /* Delete delegation lives beside the toggle one: one listener for the
+     whole body, so re-rendered rows never stack handlers. */
+  $("sitesBody").addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-del]");
+    if (!btn) return;
+    var name = btn.getAttribute("data-del") || "";
+    if (!window.confirm("حذف متجر " + name + " نهائيًا؟")) return;
+    api("remove_site", name).then(function (res) {
+      if (res && !res.ok) {
+        window.alert((res && res.message) || "تعذّر حذف المتجر.");
+        return;
+      }
+      loadSites(); poll(true);
+    });
   });
 
   /* ------------------------------------------------------------------ *
