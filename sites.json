@@ -20,16 +20,107 @@
       "link": "a[href*='/shop/']",
       "image": "img",
       "use_playwright": false,
-      "paginate": { "param": "page", "max_pages": 5 },
-      "page_delay": [0.4, 0.9],
+      "paginate": {
+        "param": "page",
+        "max_pages": 5
+      },
+      "page_delay": [
+        0.4,
+        0.9
+      ],
       "coupon_badge": true,
       "detail_pages": true,
       "detail_cap": 16,
       "detail_batch": 6,
       "detail_workers": 6,
       "detail_timeout_ms": 30000,
-      "detail_delay": [0.3, 0.9],
+      "detail_delay": [
+        0.3,
+        0.9
+      ],
       "refresh_sec": 1800
+    },
+    {
+      "name": "Dream 2000",
+      "platform": "shopify",
+      "search_url": "https://dream2000.com/search?q={q}",
+      "item": ".product-card__wrapper",
+      "title": ".product-card__title a",
+      "price_now": ".product-card__price .price",
+      "price_old": ".product-card__price .compare-at-price",
+      "link": ".product-card__title a",
+      "image": "img.product-card__image",
+      "paginate": {
+        "param": "page",
+        "max_pages": 5
+      },
+      "page_delay": [
+        0.5,
+        1.1
+      ]
+    },
+    {
+      "name": "Kimo Store",
+      "platform": "shopify",
+      "search_url": "https://kimostore.net/search?q={q}",
+      "item": ".grid__item.product-item",
+      "title": ".product-collection__title a",
+      "price_now": ".product-collection__price",
+      "price_old": ".product-collection__price .compare",
+      "link": ".product-collection__title a",
+      "image": ".product-collection__image img",
+      "paginate": {
+        "param": "page",
+        "max_pages": 5
+      },
+      "page_delay": [
+        0.5,
+        1.1
+      ]
+    },
+    {
+      "name": "Miami Centers",
+      "platform": "woocommerce",
+      "search_url": "https://miamicenters.com/?s={q}&post_type=product",
+      "item": ".product-grid-item",
+      "title": "h3.wd-entities-title a",
+      "price_now": ".price",
+      "price_old": ".price del",
+      "link": "h3.wd-entities-title a",
+      "image": "img",
+      "paginate": {
+        "path": "/page/{n}/",
+        "max_pages": 8
+      },
+      "page_delay": [
+        0.5,
+        1.1
+      ]
+    },
+    {
+      "name": "elshennawy.com",
+      "search_url": "https://www.elshennawy.com/index.php?route=product/search&search={q}",
+      "item": "div.product-layout",
+      "title": "h4",
+      "price_now": "p.price span.price-new",
+      "price_old": "p.price span.price-old",
+      "link": "a",
+      "image": "img",
+      "paginate": {
+        "param": "page",
+        "max_pages": 4
+      },
+      "page_delay": [
+        0.5,
+        1.1
+      ]
+    },
+    {
+      "name": "rayashop.com",
+      "search_url": "https://www.rayashop.com/catalogsearch/result/?q={q}",
+      "method": "api",
+      "api": "magento_graphql",
+      "api_url": "https://api-rayashop.global.ssl.fastly.net/graphql"
     }
   ]
 }

@@ -14,6 +14,8 @@ Self-test (no window): python price_tracker.py --selftest [query]
 """
 import asyncio
 import contextlib
+import store_race
+from html import unescape as _unescape
 import io
 import json
 import logging
@@ -149,6 +151,7 @@ SEARCH_TIMEOUT_SEC = 8 * 60  # watchdog: free a stuck search
 # installer is actually done.
 UPDATE_EXIT_WAIT_SEC = 45
 SITES_FILE = "sites.json"
+DEFAULT_SITES_FILE = "sites.default.json"
 SETTINGS_FILE = "settings.json"
 PREVRUN_FILE = "prevrun.json"
 SLOW_AFTER_SEC = 45  # a site slower than this gets an amber status dot
@@ -1156,8 +1159,40 @@ def _walk_jsonld(node, out):
             _walk_jsonld(v, out)
 
 
+def _offer_price(offers):
+    """Best price number out of a schema.org offers block.
+
+    Stores nest this differently: a single Offer dict, a list of Offers,
+    an AggregateOffer with lowPrice, or an Offer wrapping a
+    PriceSpecification. All of them mean the same thing here.
+    """
+    if isinstance(offers, dict):
+        offers = [offers]
+    if not isinstance(offers, list):
+        return None
+    for o in offers:
+        if not isinstance(o, dict):
+            continue
+        for key in ("price", "lowPrice"):
+            if o.get(key) is not None:
+                return o.get(key)
+        spec = o.get("priceSpecification")
+        if isinstance(spec, dict) and spec.get("price") is not None:
+            return spec.get("price")
+        if isinstance(spec, list) and spec:
+            first = spec[0] if isinstance(spec[0], dict) else {}
+            if first.get("price") is not None:
+                return first.get("price")
+    return None
+
+
 def extract_jsonld_products(soup, base_url):
-    """Fallback: pull (title, price, url) from application/ld+json blocks."""
+    """Fallback: pull (title, price, url) from application/ld+json blocks.
+
+    Besides plain Product/Offer dicts this also reads the wrappers stores
+    actually ship: @graph lists, ItemList/itemListElement search results,
+    and offers carrying a priceSpecification instead of a bare price.
+    """
     found = []
     for tag in soup.find_all("script", type="application/ld+json"):
         raw = tag.string or tag.get_text() or ""
@@ -1174,12 +1209,8 @@ def extract_jsonld_products(soup, base_url):
             title = n.get("name")
             url = n.get("url")
             price = n.get("price")
-            offers = n.get("offers")
-            if price is None and isinstance(offers, dict):
-                price = offers.get("price", offers.get("lowPrice"))
-            elif price is None and isinstance(offers, list) and offers:
-                o = offers[0] if isinstance(offers[0], dict) else {}
-                price = o.get("price", o.get("lowPrice"))
+            if price is None:
+                price = _offer_price(n.get("offers"))
             try:
                 price_f = float(str(price).replace(",", "")) if price is not None else None
             except (ValueError, TypeError):
@@ -1188,6 +1219,79 @@ def extract_jsonld_products(soup, base_url):
                 link = urljoin(base_url, url) if url else base_url
                 found.append({"title": str(title).strip(), "price": price_f, "link": link})
     # de-dupe by (title, link)
+    seen, uniq = set(), []
+    for p in found:
+        key = (p["title"], p["link"])
+        if key not in seen:
+            seen.add(key)
+            uniq.append(p)
+    return uniq
+
+
+def _walk_next_data(node, out):
+    """Collect dicts inside __NEXT_DATA__/__NUXT__ state that look like products."""
+    if isinstance(node, dict):
+        keys = set(node.keys())
+        if (("name" in keys or "title" in keys)
+                and ("price" in keys or "finalPrice" in keys
+                     or "salePrice" in keys or "regularPrice" in keys)
+                and ("url" in keys or "slug" in keys or "handle" in keys
+                     or "link" in keys or "id" in keys)):
+            out.append(node)
+        for v in node.values():
+            _walk_next_data(v, out)
+    elif isinstance(node, list):
+        for v in node:
+            _walk_next_data(v, out)
+
+
+def extract_next_data_products(soup, base_url):
+    """Fallback: pull products from Next.js/Nuxt embedded app state.
+
+    JS-hydrated storefronts ship their listing inside #__NEXT_DATA__ or
+    window.__NUXT__ payloads. Prices there are numbers already, so no selector
+    has to survive the theme's hashed class names.
+    """
+    found = []
+    payloads = []
+    tag = soup.find("script", id="__NEXT_DATA__")
+    if tag:
+        raw = tag.string or tag.get_text() or ""
+        if raw.strip():
+            payloads.append(raw.strip())
+    for tag in soup.find_all("script"):
+        raw = tag.string or tag.get_text() or ""
+        raw = (raw or "").strip()
+        if raw.startswith("window.__NUXT__"):
+            payloads.append(raw.split("=", 1)[-1].rstrip(" ;"))
+    for raw in payloads:
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        nodes = []
+        _walk_next_data(data, nodes)
+        for n in nodes:
+            title = n.get("name") or n.get("title")
+            url = (n.get("url") or n.get("link")
+                   or ("/products/" + str(n["handle"]) if n.get("handle")
+                       else None)
+                   or ("/product/" + str(n["slug"]) if n.get("slug")
+                       else None))
+            price = (n.get("price") or n.get("finalPrice")
+                     or n.get("salePrice"))
+            if price is None:
+                offers = n.get("offers")
+                price = _offer_price(offers) if offers else None
+            try:
+                price_f = float(str(price).replace(",", "")) \
+                    if price is not None else None
+            except (ValueError, TypeError):
+                price_f = None
+            if title and price_f is not None and price_f > 0:
+                link = urljoin(base_url, str(url)) if url else base_url
+                found.append({"title": str(title).strip(),
+                              "price": price_f, "link": link})
     seen, uniq = set(), []
     for p in found:
         key = (p["title"], p["link"])
@@ -1340,8 +1444,14 @@ def detect_page_param(soup, final_url):
     paginated_urls can already build - but only when the config says so, and
     nothing says so for a store the user pasted a link for. Read off the pager
     so the query style is detected rather than assumed to be the path style.
+
+    Only recognised pagination names win: a pager link can carry other numbers
+    (a variant id, a filter), and picking one of those walks the same page
+    forever while looking like progress.
     """
+    known = ("page", "paged", "product-page", "p")
     best = None
+    best_known = None
     for a in soup.select("a[href]"):
         label = a.get_text(strip=True)
         if not label.isdigit():
@@ -1360,6 +1470,11 @@ def detect_page_param(soup, final_url):
             if value.isdigit() and 2 <= int(value) <= 500:
                 if best is None or int(value) > best[1]:
                     best = (key, int(value))
+                if key in known and (best_known is None
+                                     or int(value) > best_known[1]):
+                    best_known = (key, int(value))
+    if best_known:
+        return best_known[0]
     return best[0] if best else None
 
 
@@ -1409,6 +1524,34 @@ def scrape_site(site, query, progress=None, enrich=True):
     name = site.get("name", "?")
     key = site.get("name", "default")
     BROWSER._site_label = name
+    if site.get("method") in ("api", "structured", "embedded", "sitemap") \
+            or site.get("use_webview"):
+        # Entries saved by the add-store race carry their winning method and
+        # reuse it directly instead of re-running the whole race. If the saved
+        # method fails, one automatic fallback race (cheap methods only) tries
+        # to refresh the entry before giving up on this refresh cycle.
+        try:
+            return store_race.scrape_race_site(site, query,
+                                               progress=progress,
+                                               enrich=enrich)
+        except Exception:
+            logging.exception("saved method failed for %s, refreshing",
+                              name)
+            try:
+                fresh = store_race.quick_refresh(site, query)
+            except Exception:
+                logging.exception("refresh race failed for %s", name)
+                fresh = None
+            if fresh:
+                try:
+                    replace_site_entry(name, fresh)
+                except Exception:
+                    logging.exception("could not persist refreshed entry")
+                site = fresh
+                return store_race.scrape_race_site(site, query,
+                                                  progress=progress,
+                                                  enrich=enrich)
+            raise
     url = site["search_url"].replace("{q}", quote_plus(query))
     pages = paginated_urls(site, url)
     delay = page_delay_range(site)
@@ -1534,6 +1677,17 @@ def _parse_cards(site, html, final_url):
                 fb = card.select_one('.price-box .price')
             price_after = parse_price(fb.get_text(" ", strip=True)) if fb else None
         price_before = parse_price(old_el.get_text(" ", strip=True)) if old_el else None
+        if (price_before is not None and price_after is not None
+                and price_after == price_before):
+            # WooCommerce writes a discounted price as <del>old</del>
+            # <ins>new</ins> inside the same .price block, so a price_now
+            # selector naming the block reads "old new" and parse_price takes
+            # the first number - always the higher one. The <ins> holds what
+            # the customer actually pays.
+            ins = card.select_one("ins .amount, ins")
+            ins_price = parse_price(ins.get_text(" ", strip=True)) if ins else None
+            if ins_price is not None:
+                price_after = ins_price
         if price_after is None:
             continue  # skip cards with no usable current price
         if price_before is None:
@@ -1567,7 +1721,14 @@ def _parse_cards(site, html, final_url):
         link = urljoin(final_url, href) if href else final_url
         img = ""
         if img_el is not None:
-            img = img_el.get("src") or img_el.get("data-src") or ""
+            img = (img_el.get("src") or img_el.get("data-src")
+                   or img_el.get("data-lazy-src") or "")
+            if not img or img.startswith("data:"):
+                # Lazy-loaded Shopify/Woo themes keep the real URL in srcset
+                # (or a data- variant) while src holds a placeholder.
+                srcset = (img_el.get("srcset") or img_el.get("data-srcset") or "")
+                if srcset:
+                    img = srcset.split(",")[0].strip().split(" ")[0]
             if img:
                 img = urljoin(final_url, img)
         rows.append({
@@ -1583,8 +1744,23 @@ def _parse_cards(site, html, final_url):
         })
 
     if not rows:
-        # JSON-LD fallback for stores exposing price/offers in script tags.
+        # Structured-data fallbacks, cheapest first: JSON-LD is SEO-critical so
+        # stores keep it stable, and Next/Nuxt state carries the listing even
+        # when cards only hydrate in the browser. Either one saves a store whose
+        # card classes no selector could name.
         for p in extract_jsonld_products(soup, final_url):
+            rows.append({
+                "site": site["name"],
+                "title": p["title"],
+                "before": round(p["price"], 2),
+                "after": round(p["price"], 2),
+                "discount": 0.0,
+                "link": p["link"],
+                "image": "",
+                "timestamp": ts,
+            })
+    if not rows:
+        for p in extract_next_data_products(soup, final_url):
             rows.append({
                 "site": site["name"],
                 "title": p["title"],
@@ -1648,10 +1824,20 @@ def load_sites():
         for s in sites:
             if not isinstance(s, dict):
                 return [], "ملف sites.json غير صالح. يُرجى مراجعة الملف والمحاولة مرة أخرى."
-            for k in ("name", "search_url", "item", "title", "price_now", "link"):
-                if not s.get(k):
-                    return [], ("موقع ينقصه بيانات (%s). يُرجى مراجعة ملف sites.json."
-                                 % s.get("name", "?"))
+            if not s.get("name") or not s.get("search_url"):
+                return [], ("موقع ينقصه بيانات (%s). يُرجى مراجعة ملف sites.json."
+                             % s.get("name", "?"))
+            # Classic selector entries need their card fields; race-saved
+            # method entries (api/structured/embedded/sitemap, or a WebView2
+            # entry) carry the winning method instead of selectors.
+            has_classic = all(s.get(k) for k in ("item", "title",
+                                                "price_now", "link"))
+            has_method = (s.get("method") in ("api", "structured",
+                                              "embedded", "sitemap")
+                          or s.get("use_webview"))
+            if not (has_classic or has_method):
+                return [], ("موقع ينقصه بيانات (%s). يُرجى مراجعة ملف sites.json."
+                             % s.get("name", "?"))
             # How many product pages may be opened at once for coupons.
             # Over plain HTTP this is a worker count, not browser tabs, so it
             # may go higher; the hard cap keeps a burst polite either way.
@@ -1664,6 +1850,106 @@ def load_sites():
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         logging.exception("sites.json load failed")
         return [], "ملف sites.json غير صالح (ليست بيانات JSON سليمة). يُرجى مراجعة الملف والمحاولة مرة أخرى."
+
+
+def _site_key(entry):
+    """Identity of a store entry: its host, else its name."""
+    if not isinstance(entry, dict):
+        return ""
+    host = urlparse(entry.get("search_url") or "").netloc.lower()
+    if host:
+        return "host:" + host
+    api_host = urlparse(entry.get("api_url") or "").netloc.lower()
+    if api_host:
+        return "host:" + api_host
+    return "name:" + str(entry.get("name") or "")
+
+
+def _read_sites_list(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            loaded = json.load(f)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    data = loaded if isinstance(loaded, dict) else {"sites": loaded}
+    sites = data.get("sites")
+    return sites if isinstance(sites, list) else None
+
+
+def merge_default_stores(settings, program_dir=None, _save=None):
+    """Protect user stores across updates without resurrecting deletions.
+
+    The installer overwrites sites.json next to the exe on every update, so
+    without this a user's added stores vanish and a user's deletions come
+    back. The build ships a pristine sites.default.json beside it; on launch
+    this merges only genuinely new defaults in (matched by host), remembers
+    which defaults shipped last time, and treats anything the user removed
+    since then as deleted for good. Never removes anything itself.
+    """
+    program_dir = program_dir or app_dir()
+    defaults_path = os.path.join(program_dir, DEFAULT_SITES_FILE)
+    user_path = os.path.join(program_dir, SITES_FILE)
+    defaults = _read_sites_list(defaults_path)
+    if defaults is None:
+        return 0  # dev checkout or old build: nothing to merge against
+    save = _save or save_settings
+    removed = set(settings.get("removed_hosts") or [])
+    shipped = settings.get("shipped_hosts")
+    default_keys = {_site_key(d) for d in defaults if _site_key(d)}
+    user = _read_sites_list(user_path)
+    if user is None:
+        # No usable user file: start from the shipped defaults wholesale.
+        try:
+            payload = json.dumps({"sites": defaults}, ensure_ascii=False,
+                                 indent=2) + "\n"
+            tmp = user_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+                f.write(payload)
+            os.replace(tmp, user_path)
+        except OSError:
+            logging.exception("could not seed sites.json from defaults")
+            return 0
+        settings["shipped_hosts"] = sorted(default_keys)
+        settings["removed_hosts"] = sorted(removed)
+        save(settings)
+        return len(defaults)
+    user_keys = {_site_key(s) for s in user if _site_key(s)}
+    dirty = False
+    if shipped is None:
+        # First run with the merger (upgrade): anything shipped before that
+        # the user no longer has was deleted on purpose.
+        removed |= (set(default_keys) - user_keys)
+        shipped = list(default_keys)
+        settings["shipped_hosts"] = sorted(shipped)
+        settings["removed_hosts"] = sorted(removed)
+        dirty = True
+    else:
+        gone = set(shipped) - user_keys
+        if gone - removed:
+            removed |= gone
+            settings["removed_hosts"] = sorted(removed)
+            dirty = True
+    added = [d for d in defaults
+             if _site_key(d) not in user_keys and _site_key(d) not in removed]
+    if added:
+        merged = user + added
+        try:
+            payload = json.dumps({"sites": merged}, ensure_ascii=False,
+                                 indent=2) + "\n"
+            tmp = user_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+                f.write(payload)
+            os.replace(tmp, user_path)
+        except OSError:
+            logging.exception("could not merge new defaults into sites.json")
+            return 0
+    current_keys = {_site_key(d) for d in defaults if _site_key(d)}
+    if set(settings.get("shipped_hosts") or []) != current_keys:
+        settings["shipped_hosts"] = sorted(current_keys)
+        dirty = True
+    if dirty:
+        save(settings)
+    return len(added)
 
 
 # ---------------------------------------------------------------------------
@@ -1690,6 +1976,8 @@ _PROBE_QUERY = "iphone"
 _SEARCH_URL_PATTERNS = (
     "?q={q}",
     "/search?q={q}",
+    # Shopify's product-scoped search: same listing without articles/pages.
+    "/search?type=product&q={q}",
     "?search={q}",
     "?s={q}",
     "/search/{q}",
@@ -1714,6 +2002,55 @@ _SEARCH_URL_PATTERNS = (
     "?post_type=product&q={q}",
     "?s={q}&product_cat=all",
 )
+
+# Storefront platforms, fingerprinted off the home page. Each platform has its
+# own search/pagination shape, so naming it first is what keeps a pasted link
+# from burning the whole request budget on patterns its store never reads.
+# Markers are deliberately cheap substrings of the raw HTML, not selectors.
+_PLATFORM_MARKERS = (
+    ("shopify", ("cdn/shop", "myshopify.com", "Shopify.shop", "__st=")),
+    ("woocommerce", ("woocommerce", "/wp-json/", "wp-content")),
+    ("magento", ("catalogsearch", "Magento", "static/frontend",
+                 "data-price-type", "hypernode")),
+    ("nextjs", ("__NEXT_DATA__", "_next/static")),
+    ("nuxt", ("__NUXT__", "_nuxt/")),
+    ("opencart", ("index.php?route=", "route=product", "opencart")),
+    ("prestashop", ("prestashop", "controller=search")),
+    ("bigcommerce", ("bigcommerce", "search.php?search_query")),
+    ("salla", ("salla", "cdn.salla")),
+    ("zid", ("zid.store", "cdn.zid.store")),
+)
+
+
+def detect_platform(html, url):
+    """Platform guess for a storefront: shopify/woocommerce/magento/nextjs/nuxt.
+
+    Never raises and never claims certainty - "unknown" just means the generic
+    pattern list runs in its default order.
+    """
+    try:
+        blob = "%s\n%s" % (url or "", (html or "")[:60000].lower())
+    except Exception:
+        return "unknown"
+    for platform, markers in _PLATFORM_MARKERS:
+        if any(m.lower() in blob for m in markers):
+            return platform
+    return "unknown"
+
+
+# Search patterns worth trying before the generic list, per platform. These run
+# first because a platform match already survived fingerprinting, while a
+# generic pattern is a guess against an unknown store.
+PLATFORM_FIRST_PATTERNS = {
+    "shopify": ("/search?type=product&q={q}", "/search?q={q}", "?q={q}"),
+    "woocommerce": ("?s={q}&post_type=product", "?s={q}"),
+    "magento": ("/catalogsearch/result/?q={q}", "?q={q}"),
+    "opencart": ("/index.php?route=product/search&search={q}",
+                 "?route=product/search&search={q}"),
+    "prestashop": ("/search?controller=search&s={q}",),
+    "bigcommerce": ("/search.php?search_query={q}",),
+    "nuxt": ("/search/{q}?search={q}", "/search?q={q}"),
+}
 
 # Search parameters a theme is likely to accept, read off the site's own search
 # form. A storefront nearly always ships one, and it is the only reliable source
@@ -2765,6 +3102,72 @@ def append_site(entry):
     return entry, None
 
 
+def replace_site_entry(name, new_entry):
+    """Swap one site entry by name, atomically. Returns (entry, error_msg)."""
+    path = sites_path()
+    try:
+        with open(path, encoding="utf-8") as f:
+            loaded = json.load(f)
+        data = loaded if isinstance(loaded, dict) else {"sites": loaded}
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        logging.exception("could not read sites.json before replace")
+        return None, "ملف sites.json غير صالح، لم يتم الحفظ."
+    sites = data.get("sites")
+    if not isinstance(sites, list):
+        return None, "ملف sites.json غير صالح، لم يتم الحفظ."
+    swapped = False
+    for i, current in enumerate(sites):
+        if isinstance(current, dict) and current.get("name") == name:
+            sites[i] = new_entry
+            swapped = True
+            break
+    if not swapped:
+        return None, "المتجر %s غير موجود." % name
+    payload = json.dumps({"sites": sites}, ensure_ascii=False, indent=2) + "\n"
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(payload)
+        os.replace(tmp, path)
+    except OSError as e:
+        logging.exception("could not write sites.json")
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        return None, "تعذّر حفظ المتجر (%s)." % e
+    return new_entry, None
+
+
+def remove_site_entry(name):
+    """Delete one site entry by name, atomically. Returns error_msg or None."""
+    path = sites_path()
+    try:
+        with open(path, encoding="utf-8") as f:
+            loaded = json.load(f)
+        data = loaded if isinstance(loaded, dict) else {"sites": loaded}
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        logging.exception("could not read sites.json before remove")
+        return "ملف sites.json غير صالح، لم يتم الحذف."
+    sites = data.get("sites")
+    if not isinstance(sites, list):
+        return "ملف sites.json غير صالح، لم يتم الحذف."
+    kept = [s for s in sites
+            if not (isinstance(s, dict) and s.get("name") == name)]
+    if len(kept) == len(sites):
+        return "المتجر %s غير موجود." % name
+    payload = json.dumps({"sites": kept}, ensure_ascii=False, indent=2) + "\n"
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(payload)
+        os.replace(tmp, path)
+    except OSError as e:
+        logging.exception("could not write sites.json")
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        return "تعذّر حذف المتجر (%s)." % e
+    return None
+
+
 def settings_path():
     return os.path.join(data_dir(), SETTINGS_FILE)
 
@@ -2880,8 +3283,9 @@ class TrackerCore:
     """All app logic with no GUI toolkit dependency (testable headless)."""
 
     def __init__(self):
-        self.sites, self.sites_error = load_sites()
         self.settings = load_settings()
+        merge_default_stores(self.settings)
+        self.sites, self.sites_error = load_sites()
         self.all_rows = []       # raw rows from the last search
         self.results = []        # filtered rows (shown + saved)
         _prev = load_prevrun()
@@ -2901,6 +3305,13 @@ class TrackerCore:
         self._add_job = {"state": "idle", "message": "", "result": None,
                          "url": ""}
         self._add_cancel = False
+        # The multi-method add-store race (Sources page dialog). Same shape as
+        # the probe job above: a worker thread owns the race, the page polls
+        # race_add_store_status for per-method progress.
+        self._race_lock = threading.Lock()
+        self._race_job = {"state": "idle", "message": "", "methods": [],
+                          "result": None, "url": "", "keyword": ""}
+        self._race = None
         # Manifest cache. The page re-checks for updates while the window
         # stays open, and a repeating network fetch on every check is a
         # cost the user can feel. The manifest only changes when a new
@@ -3624,6 +4035,27 @@ class TrackerCore:
         self.save_settings()
         return True
 
+    def remove_site(self, name):
+        """Delete a store by name (file + memory + related state)."""
+        name = name or ""
+        err = remove_site_entry(name)
+        if err:
+            return {"ok": False, "message": err}
+        sites, sites_error = load_sites()
+        if sites_error:
+            logging.error("sites.json unreadable after remove: %s",
+                          sites_error)
+            return {"ok": False, "message": sites_error}
+        self.sites = sites
+        dis = set(self.disabled_sites())
+        if name in dis:
+            dis.discard(name)
+            self.settings["disabled_sites"] = sorted(dis)
+            self.save_settings()
+        self.site_stats.pop(name, None)
+        _DETAIL_BATCH.pop(name, None)
+        return {"ok": True, "message": "تم حذف %s." % name}
+
     # ----- adding a store by its URL -----
     def add_store(self, url):
         """Start working out how to read a pasted store URL.
@@ -3702,6 +4134,135 @@ class TrackerCore:
                                  "message": "حدث خطأ أثناء فحص الموقع.",
                                  "result": None, "url": url}
                 self._add_cancel = False
+
+    # ----- multi-method add-store race -----
+    def race_add_store(self, url, keyword=""):
+        """Start the extraction race in the dialog. Never blocks."""
+        with self._race_lock:
+            if self._race_job.get("state") == "running":
+                return {"ok": False, "started": False,
+                        "message": "هناك فحص جارٍ بالفعل."}
+            self._race_job = {"state": "running",
+                              "message": "جاري البدء…", "methods": [],
+                              "result": None, "url": url or "",
+                              "keyword": keyword or ""}
+            self._race = None
+        thread = threading.Thread(target=self._race_worker,
+                                  args=(url or "", keyword or ""),
+                                  daemon=True)
+        thread.start()
+        return {"ok": True, "started": True, "message": "بدأ الفحص بكل الطرق…"}
+
+    def race_cancel_add_store(self):
+        with self._race_lock:
+            if self._race_job.get("state") != "running":
+                return {"ok": False}
+            race = self._race
+            self._race_job["message"] = "جاري الإلغاء…"
+        if race is not None:
+            race.token.cancel()
+        return {"ok": True}
+
+    def race_add_store_status(self):
+        self._race_tick()
+        with self._race_lock:
+            job = dict(self._race_job)
+            methods = [dict(m) for m in job.get("methods", [])]
+            result = job.get("result")
+        return {"state": job.get("state", "idle"),
+                "message": job.get("message", ""),
+                "methods": methods,
+                "result": result}
+
+    def race_retry_method(self, method_id):
+        """Re-run one method alone (its dialog row button)."""
+        with self._race_lock:
+            if self._race_job.get("state") == "running":
+                return {"ok": False, "message": "هناك فحص جارٍ بالفعل."}
+            url = self._race_job.get("url", "")
+            keyword = self._race_job.get("keyword", "")
+            if not url:
+                return {"ok": False, "message": "لا يوجد فحص سابق."}
+            self._race_job = {"state": "running",
+                              "message": "إعادة تجربة طريقة واحدة…",
+                              "methods": [], "result": None,
+                              "url": url, "keyword": keyword}
+        thread = threading.Thread(target=self._race_worker,
+                                  args=(url, keyword, method_id,),
+                                  daemon=True)
+        thread.start()
+        return {"ok": True, "started": True}
+
+    def _race_progress(self, race):
+        with self._race_lock:
+            if self._race_job.get("state") == "running" and self._race is race:
+                snapshot = race.snapshot()
+                self._race_job["message"] = snapshot["message"]
+                self._race_job["methods"] = snapshot["methods"]
+
+    def _race_worker(self, url, keyword, single=None):
+        """Own the race, then save the winner. Runs off the UI thread."""
+        race = store_race.Race(url, keyword)
+        with self._race_lock:
+            if self._race_job.get("state") != "running":
+                return
+            self._race = race
+        outcome = None
+        try:
+            outcome = race.run(single=single)
+            with self._race_lock:
+                snapshot = race.snapshot()
+                self._race_job["message"] = snapshot["message"]
+                self._race_job["methods"] = snapshot["methods"]
+            if outcome and outcome.get("ok") and outcome.get("winner"):
+                winner = outcome["winner"]
+                entry = dict(winner.get("entry") or {})
+                if entry:
+                    entry["name"] = entry.get("name") or urlparse(
+                        url).netloc.replace("www.", "")
+                    _saved, err = append_site(entry)
+                    if err:
+                        outcome = {"ok": False, "message": err,
+                                   "winner": winner}
+                    else:
+                        sites, sites_error = load_sites()
+                        if not sites_error:
+                            self.sites = sites
+                        outcome["message"] = (
+                            "تمت إضافة %s بنجاح بطريقة %s (%d منتج)."
+                            % (entry.get("name", "?"),
+                               winner.get("name", ""),
+                               winner.get("count", 0)))
+                else:
+                    outcome = {"ok": False,
+                               "message": "الطريقة لا تحفظ متجرًا."}
+            state = "ok" if outcome and outcome.get("ok") else "failed"
+            message = (outcome.get("message", "") if outcome
+                       else "انتهى الفحص.")
+            with self._race_lock:
+                if self._race is race:
+                    self._race_job = {"state": state, "message": message,
+                                      "methods": race.snapshot()["methods"],
+                                      "result": outcome, "url": url,
+                                      "keyword": keyword}
+                    self._race = None
+        except Exception:
+            logging.exception("race worker failed")
+            with self._race_lock:
+                if self._race is race:
+                    self._race_job = {"state": "failed",
+                                      "message": "حدث خطأ أثناء الفحص.",
+                                      "methods": [], "result": None,
+                                      "url": url, "keyword": keyword}
+                    self._race = None
+
+    def _race_tick(self):
+        """Copy live method rows for the polling page (called by status)."""
+        with self._race_lock:
+            race = self._race
+            running = self._race_job.get("state") == "running"
+        if race is not None and running:
+            self._race_progress(race)
 
     def set_columns(self, cols):
         cols = [c for c in (cols or []) if c in ALL_COLUMNS]
@@ -4085,6 +4646,9 @@ class Api:
     def set_site_enabled(self, name, on):
         return {"ok": self._core.set_site_enabled(name or "", bool(on))}
 
+    def remove_site(self, name):
+        return self._core.remove_site(name or "")
+
     def add_store(self, url):
         return self._core.add_store(url or "")
 
@@ -4093,6 +4657,18 @@ class Api:
 
     def add_store_status(self):
         return self._core.add_store_status()
+
+    def race_add_store(self, url, keyword=""):
+        return self._core.race_add_store(url or "", keyword or "")
+
+    def race_cancel_add_store(self):
+        return self._core.race_cancel_add_store()
+
+    def race_add_store_status(self):
+        return self._core.race_add_store_status()
+
+    def race_retry_method(self, method_id):
+        return self._core.race_retry_method(method_id or "")
 
     def set_columns(self, cols):
         return {"ok": self._core.set_columns(list(cols or []))}

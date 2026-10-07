@@ -28,6 +28,10 @@ prevrun.json
 prices.xlsx
 *.log
 
+# Scrapling spider output: crawl checkpoints, exported catalogs, dev cache.
+crawl_data/
+.scrapling_cache/
+
 # ---- Local tooling ----
 # Agent/editor tooling, not part of the application.
 .opencode/

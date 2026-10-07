@@ -1,7 +1,8 @@
 Price Tracker
 
 A Windows desktop app that searches one keyword across Egyptian phone stores
-(2B Egypt, Dubai Phone) and shows real prices with before/after values,
+(2B Egypt, Dubai Phone, Dream 2000, Kimo Store, Compumarts, Miami Centers)
+and shows real prices with before/after values,
 discount percentages, and coupon math — then keeps an Excel record and flags
 price drops over time.
 
@@ -73,7 +74,61 @@ optionally `price_old` and `image`.
 
 Optional keys: `paginate` (`{"param": "page", "max_pages": 5}`),
 `page_delay`, `refresh_sec`, `coupon_badge`, `detail_pages`, `detail_cap`,
-`use_playwright`.
+`use_playwright`, `platform` (free-form hint: `shopify`, `woocommerce`,
+`magento` — documents which quirk set the entry was verified against).
+
+### Per-platform cheat sheet
+
+Every new store so far turned out to be one of two platforms, each with its
+own search/pagination shape. Match the platform first, then verify the
+selectors live — class names drift between themes.
+
+| Platform | Stores here | Search URL | Pages | Price quirk |
+|---|---|---|---|---|
+| Shopify | Dream 2000, Kimo, Compumarts | `/search?q={q}` | `?page=N` (`{"param": "page"}`) | Sale cards split current/compare into separate spans; single-price cards have no compare node (`before = after`) |
+| WooCommerce (Woodmart) | Miami Centers | `/?s={q}&post_type=product` (the `post_type` filter keeps blog posts out) | `/page/N/` (`{"path": "/page/{n}/"}`) | Discounted price is `<del>old</del> <ins>new</ins>` inside one `.price` — the parser prefers `<ins>` when both numbers are present |
+| Magento 2 | 2B Egypt | `/catalogsearch/result/?q={q}` (locale prefix matters: `/en/…`) | `?p=N` | Compare-at and current share `span.price`, split only by `.old-price` / `.special-price` wrappers |
+| Next.js (custom) | Dubai Phone | site-specific (`/search-results?q=`) | `?page=N` | Coupon badges (`coupon_badge: true`): displayed price is pre-coupon |
+
+Two parser fallbacks cover stores whose cards hydrate late or rename classes:
+JSON-LD (`@graph` / `ItemList` / `priceSpecification` aware) and lazy-image
+`srcset` / `data-srcset` URLs.
+
+### Collecting products with Scrapling (`scrapling_client.py`)
+
+A self-contained module built on [Scrapling](https://github.com/D4Vinci/Scrapling)
+(`scrapling[fetchers]==0.4.15` in `requirements.txt`). Pass a store URL, get
+back product rows (`title`, `price`, `currency`, `old_price`, `image_urls`,
+`availability`, `link`):
+
+```bat
+.venv\Scripts\python scrapling_client.py --url https://dream2000.com --query iphone
+.venv\Scripts\python scrapling_client.py --url "https://www.compumarts.com/search?q=iphone" --out products.json
+.venv\Scripts\python scrapling_client.py --url https://miamicenters.com --query iphone --crawl --out catalog.json
+```
+
+Method ladder, lightest first: Shopify/Woo JSON endpoints → plain `Fetcher`
+→ `DynamicFetcher` (installed Chrome, no browser download) → `StealthyFetcher`
+(Cloudflare only). Spiders run polite by default (`robots_txt_obey`, 1
+req/domain at a time, delay); proxies stay off unless `--proxies` is passed.
+After `pip install`, run `.venv\Scripts\scrapling install` once for the
+bundled browsers (skippable while `real_chrome` covers the browser fetchers).
+
+Batch mode collects many listing pages concurrently while keeping the same
+politeness rules (global + per-domain caps, per-domain delay, robots.txt):
+
+```bat
+.venv\Scripts\python scrapling_client.py --batch tasks.json --out batch.json
+.venv\Scripts\python scrapling_client.py --batch tasks.json --no-parallel
+.venv\Scripts\python benchmark_parallel.py
+```
+
+`tasks.json` is a list of URLs (or `{"url", "query"?, "selectors"?,
+"fetcher"?}` objects). Parallelism lives in one place — `ParallelConfig`
+(`enabled`, `max_concurrent=4`, `max_per_domain=2`, `browser_tabs=2`) —
+and `enabled=False` (or `--no-parallel`) replays the same pipeline
+sequentially for debugging. Measured on 6 real store pages: 7.9s sequential
+vs 2.9s parallel (2.7x), identical extracted data.
 
 ### Adding a store from its URL
 

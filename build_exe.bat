@@ -50,6 +50,14 @@ if not exist "dist\PriceTracker\sites.json" (
     exit /b 1
 )
 
+REM sites.default.json is the pristine copy the app merges against on launch:
+REM new default stores are added, user deletions are never resurrected.
+copy /Y sites.json "dist\PriceTracker\sites.default.json" >nul
+if not exist "dist\PriceTracker\sites.default.json" (
+    echo ERROR: sites.default.json was not staged next to the exe.
+    exit /b 1
+)
+
 echo.
 echo BUILD DONE: dist\PriceTracker\PriceTracker.exe
 endlocal

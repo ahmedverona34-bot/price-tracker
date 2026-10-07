@@ -249,20 +249,12 @@ try {
 
         <section class="extract add-store">
           <div class="extract-row">
-            <div class="mini-search">
-              <input id="addStoreUrl" type="text" dir="ltr"
-                     placeholder="example.com"
-                     aria-label="رابط متجر جديد"
-                     autocomplete="off" spellcheck="false">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+            <div class="add-store-intro">
+              <div class="extract-title">إضافة متجر جديد</div>
+              <p class="extract-hint">الصق رابط أي متجر، والبرنامج يجرب كل طرق الاستخراج معًا ويحفظ الطريقة الفائزة.</p>
             </div>
-            <button id="addStoreBtn" class="btn-primary">إضافة متجر</button>
-            <button id="addStoreCancelBtn" class="btn-outline sm hidden">إلغاء</button>
+            <button id="openStoreModalBtn" class="btn-primary">إضافة متجر</button>
           </div>
-          <!-- Progress lives here rather than in a modal: the probe takes a few
-               seconds of real network work, and a dialog over the page would
-               hide the stores table the user is adding to. -->
-          <p id="addStoreMsg" class="add-store-msg" role="status" aria-live="polite" hidden></p>
         </section>
 
         <section class="extract">
@@ -289,6 +281,29 @@ try {
         <!-- settings moved to topbar glass menu -->
 
 
+  </div>
+</div>
+<!-- ================= DIALOG: add store race ================= -->
+<div id="storeModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-label="إضافة متجر جديد">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 class="modal-title">إضافة متجر جديد</h2>
+      <button id="storeModalClose" class="icon-btn" aria-label="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <label class="field-label" for="storeUrlInput">رابط المتجر</label>
+      <input id="storeUrlInput" type="text" dir="ltr" placeholder="https://example.com"
+             autocomplete="off" spellcheck="false">
+      <label class="field-label" for="storeKeywordInput">كلمة الاختبار (اختياري)</label>
+      <input id="storeKeywordInput" type="text" placeholder="iphone"
+             autocomplete="off" spellcheck="false">
+      <div class="modal-actions">
+        <button id="storeAutoBtn" class="btn-primary">استخراج تلقائي بكل الطرق</button>
+        <button id="storeModalCancelBtn" class="btn-outline sm hidden">إلغاء الفحص</button>
+      </div>
+      <div id="storeMethodsList" class="methods-list" aria-live="polite"></div>
+      <p id="storeModalMsg" class="add-store-msg" role="status" aria-live="polite" hidden></p>
+    </div>
   </div>
 </div>
 <div id="settingsFloat">
