@@ -24,7 +24,7 @@
 ; from 6.3 onward; with a BOM the Arabic reads correctly on any Inno 6.x.
 
 #define AppName "Price Tracker"
-#define AppVersion "1.2.13"
+#define AppVersion "1.2.14"
 #define AppExeName "PriceTracker.exe"
 #define AppPublisher "Price Tracker"
 ; Wizard and Add/Remove Programs icon. Inno reads the .ico directly, so the
