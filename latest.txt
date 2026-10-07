@@ -1,2 +1,2 @@
-1.2.13
-https://github.com/ahmedverona34-bot/price-tracker/releases/download/v1.2.13/PriceTracker-Setup-1.2.13.exe
+1.2.14
+https://github.com/ahmedverona34-bot/price-tracker/releases/download/v1.2.14/PriceTracker-Setup-1.2.14.exe
