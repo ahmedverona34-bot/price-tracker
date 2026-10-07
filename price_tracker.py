@@ -382,6 +382,89 @@ def parse_price(text):
     return float(s)
 
 
+# Arabic product words mapped to the Latin terms Latin-titled catalogs use.
+# Applied ONLY as a second chance when a search returns zero rows: stores
+# like Miami Centers title everything in English, so "ايفون" matches nothing
+# while "iphone" matches the whole catalog. Unknown words (and numbers)
+# pass through untouched, so "ايفون 15" becomes "iphone 15".
+AR_QUERY_FOLD = {
+    "ايفون": "iphone",
+    "ايفونا": "iphone",
+    "ابل": "apple",
+    "سامسونج": "samsung",
+    "سامسونغ": "samsung",
+    "شاومي": "xiaomi",
+    "ريلمي": "realme",
+    "اوبو": "oppo",
+    "انفينيكس": "infinix",
+    "تكنو": "tecno",
+    "هونر": "honor",
+    "هواوي": "huawei",
+    "نوكيا": "nokia",
+    "موبايل": "mobile",
+    "موبايلات": "mobile",
+    "جوال": "mobile",
+    "هاتف": "phone",
+    "هواتف": "phone",
+    "سماعه": "headphone",
+    "سماعات": "headphone",
+    "ايربودز": "earbuds",
+    "ايربود": "earbuds",
+    "شاحن": "charger",
+    "شواحن": "charger",
+    "جراب": "cover",
+    "جرابات": "cover",
+    "غطاء": "cover",
+    "كفر": "cover",
+    "كفرات": "cover",
+    "ساعه": "watch",
+    "ساعات": "watch",
+    "ساعه ذكيه": "smart watch",
+    "لابتوب": "laptop",
+    "لابتوبات": "laptop",
+    "تابلت": "tablet",
+    "ايباد": "ipad",
+    "باور بانك": "power bank",
+    "شاشه": "screen",
+    "شاشه حمايه": "screen protector",
+    "برو": "pro",
+    "ماكس": "max",
+    "الترا": "ultra",
+}
+
+
+def fold_arabic_query(query):
+    """Latin equivalent of an Arabic search query, or None if N/A.
+
+    Returns None when the query has no Arabic words we know (nothing to
+    gain from a retry) or when folding changes nothing.
+    """
+    text = (query or "").strip()
+    if not text or not re.search(r"[\u0600-\u06FF]", text):
+        return None
+    folded = text.translate(_AR_DIGITS)
+    folded = re.sub(r"[أإآ]", "ا", folded)
+    folded = folded.replace("ة", "ه")
+    words = folded.split()
+    # Two-word phrases first ("باور بانك", "ساعه ذكيه"), then single words.
+    # Anything unknown (numbers, Latin, unmapped Arabic) passes through.
+    out = []
+    i = 0
+    while i < len(words):
+        pair = " ".join(words[i:i + 2]) if i + 1 < len(words) else ""
+        if pair and pair in AR_QUERY_FOLD:
+            out.append(AR_QUERY_FOLD[pair])
+            i += 2
+        else:
+            out.append(AR_QUERY_FOLD.get(words[i], words[i]))
+            i += 1
+    result = " ".join(out)
+    result = re.sub(r"\s+", " ", result).strip()
+    if result == text or not re.search(r"[A-Za-z]", result):
+        return None
+    return result
+
+
 def parse_coupon_badge(text):
     """Extract (percent, code) from the coupon line of a product page.
 
@@ -3659,7 +3742,7 @@ class TrackerCore:
         self._baseline = dict(self.prev)
         self._baseline_empty = not self._baseline
 
-    def _scrape_one(self, site, query, gen):
+    def _scrape_one(self, site, query, gen, _folded=False):
         """Fetch one site and return (rows, seconds, blocked)."""
         name = site.get("name", "?")
         self.site_stats[name] = {"status": "loading", "rows": 0,
@@ -3681,6 +3764,17 @@ class TrackerCore:
             logging.exception("site failed: %s", name)
             return None, round(time.perf_counter() - t0, 1), False
         clear_backoff(name)
+        if not _folded and not rows:
+            # Empty but healthy: the query may be Arabic against a
+            # Latin-titled catalog ("ايفون" vs "iphone"). One retry with the
+            # folded query before reporting zero rows.
+            folded = fold_arabic_query(query)
+            if folded and folded != query:
+                logging.info("site %s: no rows for %r, retrying with %r",
+                             name, query, folded)
+                self._post_status(gen, "لا نتائج في %s، جاري المحاولة بـ %s..."
+                                  % (name, folded))
+                return self._scrape_one(site, folded, gen, _folded=True)
         return rows, round(time.perf_counter() - t0, 1), False
 
     def _stream_site(self, name, rows, gen):
